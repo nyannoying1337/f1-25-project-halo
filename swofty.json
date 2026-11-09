@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "id": "nick.f1-2026-halo",
+  "name": "Project Halo",
+  "version": "0.1.0",
+  "author": "nyannoying",
+  "icon": "icons/halo.png",
+  "description": "The 2026 F1 world feed's onboard halo graphic in place of the 2026 dial, drawn by the game's own HUD: move and resize it in HUD customisation. Read from the running game itself: no UDP telemetry, no companion app.",
+  "license": "LicenseRef-Project-Halo-Attribution-1.0",
+  "homepage": "https://github.com/nyannoying1337/f1-25-project-halo",
+  "repository": "https://github.com/nyannoying1337/f1-25-project-halo",
+  "kind": [
+    "erp",
+    "native"
+  ],
+  "category": "utility",
+  "compat": {
+    "game": "f1_25",
+    "launcher": ">=1.8.19"
+  },
+  "requires": [
+    {
+      "id": "swofty.core",
+      "version": ">=0.1.1"
+    }
+  ],
+  "options": [
+    {
+      "id": "show_names",
+      "type": "toggle",
+      "label": "Driver names",
+      "default": true,
+      "binds": "native",
+      "description": "Your position and name, and the car one place ahead in the session's classification (the car in P2 when you lead), on the left wing. Practice, qualifying and races; not in Time Trial."
+    },
+    {
+      "id": "show_turns",
+      "type": "toggle",
+      "label": "Turn numbers",
+      "default": true,
+      "binds": "native",
+      "description": "The next turn's number and direction, from 220 m before it."
+    },
+    {
+      "id": "validation_log",
+      "type": "toggle",
+      "label": "Validation log",
+      "default": false,
+      "binds": "native",
+      "description": "Off by default. Writes what the halo reads from the game, 30 times a second, as CSV to %LOCALAPPDATA%\\nick.f1-2026-halo\\diag (up to 64 MB per launch). Turn on only to send a log."
+    }
+  ],
+  "operations": {
+    "erp": [
+      "erp/halo.json"
+    ],
+    "native": [
+      {
+        "dll": "native/halo_hud.dll"
+      }
+    ]
+  }
+}

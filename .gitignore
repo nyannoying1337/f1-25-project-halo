@@ -1,0 +1,8 @@
+native/build/
+native/*.dll
+native/*.lib
+native/*.pdb
+erp/*.erp
+dist/
+*.zip
+__pycache__/
