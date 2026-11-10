@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "nick.f1-2026-halo",
   "name": "Project Halo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "nyannoying",
   "icon": "icons/halo.png",
   "description": "The 2026 F1 world feed's onboard halo graphic in place of the 2026 dial, drawn by the game's own HUD: move and resize it in HUD customisation. Read from the running game itself: no UDP telemetry, no companion app.",

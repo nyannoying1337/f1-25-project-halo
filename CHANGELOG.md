@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 beta
+
+The addon's Swofty manifest now says that it supports the Steam version of F1 25 only and needs Swofty Launcher 1.8.36 or newer. Nothing changes in the game. Everything from 0.1.0 is in this release.
+
 ## 0.1.0 beta
 
 First public release.
