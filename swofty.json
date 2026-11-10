@@ -16,7 +16,10 @@
   "category": "utility",
   "compat": {
     "game": "f1_25",
-    "launcher": ">=1.8.19"
+    "launcher": ">=1.8.36",
+    "platforms": [
+      "steam"
+    ]
   },
   "requires": [
     {

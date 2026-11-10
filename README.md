@@ -28,7 +28,7 @@ Turn the addon off to get the stock dial back.
 
 - F1 25 on Steam, build 25251167. After a game update the halo stops reading your car until a new version is out: it then shows only the values the game gives its own dial (battery, Overtake, Active Aero, your position).
 - The official 2026 Season Pack, for the F1 2026 cars and their dial.
-- Swofty Launcher 1.8.19 or newer, with Swofty Core 0.1.1 or newer.
+- Swofty Launcher 1.8.36 or newer, with Swofty Core 0.1.1 or newer.
 - Offline sessions with the F1 2026 cars.
 
 ## Settings
