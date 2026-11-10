@@ -15,9 +15,24 @@ if not defined ZIG (
 )
 cd /d "%~dp0"
 if not exist build mkdir build
+rem the halo: car, session and classification reader, HUD model, turn list (writes build\leaves.txt)
 "%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O1 -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX -I include ^
-  -o build\test_game_state.exe tests\test_game_state.cpp src\game_state_f1_25.cpp src\hud_model.cpp src\halo_track.cpp || exit /b 1
+  -o build\test_game_state.exe tests\test_game_state.cpp src\game_state_f1_25.cpp src\hud_model.cpp src\halo_track.cpp ^
+  src\gmeter.cpp || exit /b 1
 build\test_game_state.exe build\leaves.txt || exit /b 1
+rem the timing tower: reader, model, leaf publisher, a per-frame cost benchmark (writes build\tower_leaves.txt)
+"%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O1 -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX -I include ^
+  -o build\test_tower.exe tests\test_tower.cpp src\tower_reader.cpp src\tower_model.cpp src\tower_leaves.cpp ^
+  src\tower_state.cpp src\diag_log.cpp || exit /b 1
+build\test_tower.exe build || exit /b 1
+"%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O1 -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX ^
+  -o build\test_tower_state.exe tests\test_tower_state.cpp src\tower_state.cpp || exit /b 1
+build\test_tower_state.exe || exit /b 1
+rem the G-force meter
+"%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O1 -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX -I include ^
+  -o build\test_gmeter.exe tests\test_gmeter.cpp src\gmeter.cpp src\hud_model.cpp src\halo_track.cpp || exit /b 1
+build\test_gmeter.exe || exit /b 1
 "%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -I include -shared -s ^
-  -o halo_hud.dll src\halo_hud.cpp src\game_state_f1_25.cpp src\hud_model.cpp src\diag_log.cpp src\halo_track.cpp || exit /b 1
+  -o halo_hud.dll src\halo_hud.cpp src\game_state_f1_25.cpp src\hud_model.cpp src\diag_log.cpp src\halo_track.cpp ^
+  src\gmeter.cpp src\tower_reader.cpp src\tower_model.cpp src\tower_leaves.cpp src\tower_state.cpp || exit /b 1
 echo built %~dp0halo_hud.dll

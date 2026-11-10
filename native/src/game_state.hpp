@@ -18,7 +18,10 @@ constexpr int kMaxCars = 32;
 
 struct SessionState {
     bool active = false;        // the game's vehicle table holds at least one valid car
-    uint32_t generation = 0;    // bumps whenever the player car object or the set of cars changes
+    uint32_t generation = 0;    // bumps whenever the player car object or the set of cars changes (the tower's
+                                // car set: a spectator switch does not bump it)
+    uint32_t subject = 0;       // bumps whenever the car the halo follows changes: with generation, and on every
+                                // switch of the spectator's watched car (docs/spectator-ui.md §2)
     uint32_t cars = 0;          // valid cars in the vehicle table
     bool type_ok = false;
     uint32_t type = 0;          // 1..4 practice, 5..9 qualifying, 10..14 sprint shootout, 15..17 race
@@ -30,10 +33,15 @@ struct SessionState {
     bool race() const { return type_ok && type >= 15 && type <= 17; }
 };
 
+// The car the halo follows (the "subject"): the player's car, or while the game's spectator HUD is up the car its
+// director watches (SpectateState::on). Every VehicleState, PowerUnitState, EnergyState, DriverInputState and
+// ProgressState value is that car's; a value the game does not give for it is not ok (never the player's instead).
 struct VehicleState {
-    bool ok = false;            // the player's car was found and validated
+    bool ok = false;            // the car the halo follows was found and validated
     uint8_t id = 0;             // vehicle id (index into the game's vehicle table)
-    bool ai_driving = false;    // the AI drives the player's car right now (e.g. pit entry auto-drive)
+    bool player = true;         // it is the player's own car (false while spectating another car)
+    uint8_t player_id = 0;      // the player's own car's vehicle id (valid while ok)
+    bool ai_driving = false;    // the AI drives this car right now (e.g. pit entry auto-drive; any AI car)
     bool speed_ok = false;
     float speed_mps = 0;        // |velocity|, m/s
     bool gear_ok = false;
@@ -99,7 +107,7 @@ struct FieldState {
     int n = 0;
     uint8_t id[kMaxCars]{};     // vehicle ids in road order, leader first
     float total_m[kMaxCars]{};
-    int player_rank = -1;       // index into id[] of the player's car
+    int player_rank = -1;       // index into id[] of the car the halo follows (VehicleState)
     // classification: pos[vehicle id] = 1..N, 0 = not read. classified: the player's position was read and no
     // two cars share one. Practice and qualifying: the session's order (L2: comparator not decoded); race:
     // race order; the formation lap's UI shows the grid instead; time trial: never updated by the game.
@@ -107,11 +115,24 @@ struct FieldState {
     uint8_t pos[kMaxCars]{};
 };
 
+// The game's spectator director (docs/spectator-ui.md §2; component in the registry, fields +0xd0..+0xe7 copied
+// once per scan). spect_vid followed the director through all 22 cars in game (2026-11-10 04:27 log).
+struct SpectateState {
+    bool found = false;         // the director component is in the registry
+    bool read = false;          // its fields were copied this scan
+    uint8_t ui = 0;             // +0xd0: the spectator HUD is up (session.spectator_mode.active)
+    uint8_t active = 0;         // +0xd1: the director spectates
+    uint8_t vehicle = 0xff;     // +0xd6: the watched car's vehicle id, 0xff none
+    uint32_t gap = 0;           // +0xe4: the spectator menu's Gap mode (logged only; KB: 1 interval, 2 leader, 3 lap)
+    bool on = false;            // the halo follows the watched car: found, read, ui, active and a car in the table
+};
+
 struct GameState {
     double time = 0;            // seconds, the HUD's own monotonic clock
     uint64_t frame = 0;
     bool compatible = false;    // the running game is the build this provider was verified on
     SessionState session;
+    SpectateState spectate;
     VehicleState vehicle;
     PowerUnitState power_unit;
     EnergyState energy;

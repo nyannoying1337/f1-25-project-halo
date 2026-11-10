@@ -28,7 +28,8 @@ public:
     void want(const std::string &key, bool v) { slot(key, 0).want_b = v; }
     void want(const std::string &key, const std::string &v) { slot(key, 1).want_t = v; }
 
-    void flush(double now)
+    // Returns the writes queued this frame (the tower takes what is left of the frame's budget).
+    int flush(double now)
     {
         namespace hud = swofty::hud;
         if (now - last_refresh_ >= kRefresh) {
@@ -54,6 +55,14 @@ public:
                 swofty::log("[halo] hud set %s: %s", l.path.c_str(), hud::name(r));
             }
         }
+        return kWriteBudget - budget;
+    }
+
+    // the bool a leaf is set to this frame (tests); false for an unknown leaf
+    bool wanted(const std::string &key) const
+    {
+        const auto it = index_.find(key);
+        return it != index_.end() && leaves_[it->second].kind == 0 && leaves_[it->second].want_b;
     }
 
     // every leaf path this publisher writes (tests and the template check use it)
@@ -99,7 +108,48 @@ inline std::string two(int i)
 inline int stripe_level(float x) { return int(std::lround(std::clamp(x, 0.f, 1.f) * kStripes)); }
 inline int cap_level(float x) { return int(std::lround(std::clamp(x, 0.f, 1.f) * kCapLevels)); }
 
-inline void publish(Leaves &L, const View &v, double now)
+// The G-force meter (gmeter.hpp; all bool): gm shows the meter in place of the speed centre; gok its value, else the
+// dimmed label; gred the red digits; gu<d> / gt<d> the units / tenths digit d; gs<k> segment k (k * 45 degrees);
+// gw<a> / gr<a> the white / red bar on axis a (0 right, 1 down, 2 left, 3 up).
+constexpr int kGSegments = 8;
+constexpr int kGAxes = 4;
+
+inline void publish_gmeter(Leaves &L, const View &v)
+{
+    const GView &m = v.gmeter;
+    const bool ok = m.on && v.live && m.ok;
+    L.want("gm", m.on);
+    L.want("gok", ok);
+    L.want("gred", ok && m.red_digits);
+    for (int d = 0; d <= 9; ++d) {
+        L.want("gu" + std::to_string(d), ok && m.tenths / 10 == d);
+        L.want("gt" + std::to_string(d), ok && m.tenths % 10 == d);
+    }
+    const bool ind = ok && m.indicator;
+    for (int k = 0; k < kGSegments; ++k)
+        L.want("gs" + std::to_string(k), ind && ((m.segs >> k) & 1u));
+    for (int a = 0; a < kGAxes; ++a) {
+        L.want("gw" + std::to_string(a), ind && m.axis == a);
+        L.want("gr" + std::to_string(a), ind && m.red_bar && m.axis == a);
+    }
+}
+
+// The halo in 2025 and F2 cars (docs/halo-car-classes.md; written after the 2026 leaves, so their order is unchanged):
+// cls = the setting all_cars (the hud_f1_dial / hud_f2_dial halos show while it is true, their stock dials while it
+// is false); rkNN / dkNN = the 2025 cars' recharge / deploy capsule level NN on the fixed 120 kW scale (one at a
+// time, like rcNN / dpNN).
+inline void publish_classes(Leaves &L, const View &v)
+{
+    L.want("cls", v.all_cars);
+    const int rk = v.live && v.energy_ok ? cap_level(v.recharge25) : 0;
+    const int dk = v.live && v.energy_ok ? cap_level(v.deploy25) : 0;
+    for (int i = 1; i <= kCapLevels; ++i) {
+        L.want("rk" + two(i), rk == i);
+        L.want("dk" + two(i), dk == i);
+    }
+}
+
+inline int publish(Leaves &L, const View &v, double now)
 {
     const bool live = v.live;
     L.want("live", live);
@@ -130,7 +180,9 @@ inline void publish(Leaves &L, const View &v, double now)
     L.want("tr", turn && v.turn_right);
     for (int i = 0; i < kRivalSlots; ++i)
         L.want("rv" + two(i), live && v.rival_id == i);
-    L.flush(now);
+    publish_gmeter(L, v);
+    publish_classes(L, v);
+    return L.flush(now);
 }
 
 }

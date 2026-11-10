@@ -1,8 +1,9 @@
 """Write the simulator page for the built scene with a few driving states, or (for a scene_dump of dial_complete's
 halo_pv with build_native's preview.json) the HUD editor preview: every element of the static copy, its .uipre texts.
-usage: python -I sim_page.py <scene.json> <png dir> <halo dir> <out.html>
+usage: python -I sim_page.py <scene.json> <png dir> <halo dir> <out.html> [--gmeter]
 """
 import json
+import math
 import sys
 
 
@@ -32,6 +33,29 @@ def leaves(st):
     L[f'rv{rv:02d}'] = True
     L[f'#session.cars.car{rv}.position'] = rpos
     L[f'#session.cars.car{rv}.driver.second_name'] = rname
+    if 'g' in st:
+        L.update(gmeter(st['g'], st.get('gdir', 0.0), st.get('gred', False)))
+    return L
+
+
+def gmeter(m, d, red):
+    """The G-force meter's leaves (native/src/leaves.hpp publish_gmeter, gmeter.cpp) for force m (g; None = no reading)
+    at direction d (degrees, felt force: 0 right, 90 down, 180 left, 270 up). Wide from 2.0 g (no hysteresis here)."""
+    L = {'gm': True, 'gok': m is not None, 'gred': m is not None and red}
+    tenths = max(0, min(99, math.floor(m * 10 + 0.5))) if m is not None else -1
+    for x in range(10):
+        L[f'gu{x}'] = m is not None and tenths // 10 == x
+        L[f'gt{x}'] = m is not None and tenths % 10 == x
+    ind = m is not None and m >= 0.3
+    wide = ind and m >= 2.0
+    k = math.floor(d / 45 + 0.5) - 1 if wide else math.floor(d / 45)
+    segs = {(k + i) % 8 for i in range(3 if wide else 2)}
+    axis = math.floor(d / 90 + 0.5) % 4
+    for x in range(8):
+        L[f'gs{x}'] = ind and x in segs
+    for a in range(4):
+        L[f'gw{a}'] = ind and axis == a
+        L[f'gr{a}'] = ind and m >= 2.3 and axis == a
     return L
 
 
@@ -44,6 +68,18 @@ STATES = [
          straight=False, tint=True, drv='1  NORRIS', riv='2  PIASTRI', turn=4, dir='L'),
     dict(title='Other game build (memory reader off): the game\'s own speed, revs and battery only', team='#27F4D2', native_only=True,
          kmh=187, gear=5, revs=0.5, ers=0.4),
+]
+# the same frames with the G-force meter on (setting g_meter): force g at gdir degrees (felt force), gred = the flash
+_BRAKE = dict(STATES[1], kmh=288, gear=7, revs=0.86, brake=1.0, turn=1, dir='R')
+GSTATES = [
+    dict(_BRAKE, title='G-force meter: braking at 4.6 g (pushed forward), the first reading over 4.3 g flashes red',
+         g=4.6, gdir=270.0, gred=True),
+    dict(STATES[0], title='G-force meter: 2.96 g in a fast right-hander on the throttle (pushed left and back)',
+         kmh=244, gear=7, revs=0.8, straight=False, g=2.96, gdir=168.3),
+    dict(STATES[0], title='G-force meter: 0.8 g accelerating out of a left-hander', kmh=141, gear=4, revs=0.7,
+         straight=False, g=0.8, gdir=40.0),
+    dict(STATES[0], title='G-force meter: 0.1 g, under the 0.3 g indicator threshold', g=0.1, gdir=90.0),
+    dict(STATES[0], title='G-force meter: no reading from the car (label dimmed, no value)', g=None),
 ]
 
 
@@ -70,7 +106,7 @@ def main():
     states = []
     if 'state' in scene['info']:
         states = editor(scene)
-    for st in ([] if states else STATES):
+    for st in ([] if states else STATES + (GSTATES if '--gmeter' in sys.argv else [])):
         native = {'revs': st['revs'], 'ers_stored': st['ers'], 'speed_str': str(st['kmh'])}
         states.append({'title': st['title'], 'team': st['team'], 'native': native, 'leaves': {} if st.get('native_only') else leaves(st)})
     sprites = sorted({n['sprite'] for n in walk(scene['halo']) if n.get('sprite')} | {'rails', 'solid_white'})

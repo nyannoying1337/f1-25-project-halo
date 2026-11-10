@@ -30,6 +30,13 @@ constexpr uint32_t kBuildImageSize = 0x193e6000;
 constexpr double kScanPeriod = 0.1; // s: every car in the table re-read and the running order rebuilt (10 Hz)
 constexpr double kNamePeriod = 1.0; // s: the track name re-read
 constexpr double kSearchPeriod = 1.0; // s: the component registry searched again for a missing results system
+// The validation log's distance reference. The progress total changes once per simulation step (60 Hz), not
+// once per rendered frame (~170 fps), so a frame-to-frame difference is 0 on most frames and about 3x the speed
+// on the rest (in-game logs). The reference is taken between two changes of the total at least kDistWindow apart.
+constexpr double kDistWindow = 0.5;  // s
+constexpr double kDistStale = 0.25;  // s without a change (stopped, paused): the window restarts
+constexpr float kDistMaxSpeed = 150; // m/s: a faster step is a jump (car reset, flashback) and restarts the window
+constexpr int kDistMarks = 128;      // changes kept (a power of two): >= kDistWindow up to 256 changes per second
 
 // ---------------------------------------------------------------- layout (this build only)
 
@@ -37,7 +44,7 @@ constexpr double kSearchPeriod = 1.0; // s: the component registry searched agai
 // Game_Place_Vehicle (stored at 0x14473daf6, never cleared: Car_Apply_TeleportRequest 0x144644580 only zeroes the
 // priority +0x8). It is 0 at create (0x144628527), "VehicleProxyActor" (0x14560eb38) while the pit-box actor holds
 // the car in the garage, "PitLaneMovementManager::moveDownSpline" (0x14584366a) once the pit lane releases it.
-// Reading it as a vtable rejected every car from its pit exit on (found in a test drive, 2026-11-09). The car's identity is what
+// Reading it as a vtable rejected every car from its pit exit on (an in-game test, 2026-11-09). The car's identity is what
 // Car_Chassis_Build sets once and nothing rewrites while the car lives:
 //  - the systems container embedded at +0x380: vptr vt_Car_SystemsContainer 0x145c040c8 (store 0x14462877a; the
 //    only other reference is its destructor 0x14473c184, run by Car_Destroy_Live 0x14473d1f2);
@@ -154,12 +161,19 @@ constexpr uintptr_t set_human = 0x20;          // ptr: HumanController, null for
 constexpr uintptr_t set_vehicle = 0x34;        // u8: the set's vehicle index
 } // namespace controllers
 
-// The car the game spectates (replays, after retiring); the stock UDP's player index takes it first
-// (0x142cf988b). Static L2: logged only until a drive shows it reads 0 in normal play.
+// The game's spectator director; the stock UDP's player index takes its car first (0x142cf988b). Static L2, and in
+// game (2026-11-10 04:04-04:27 logs, kizi.spectator-hud F4/F8): +0xd1 set and +0xd6 followed the watched car through
+// all 22 cars, never the safety car, never 0xff between switches; 0 in every log without spectating. +0xd0 is the
+// flag the spectator HUD shows on (session.spectator_mode.active); the safety-car cinematic and the winner sequence
+// also call SetActive, so the halo follows the director only while +0xd0 is set too (docs/spectator-ui.md §2).
 namespace spectate {
 constexpr uintptr_t key_rva = 0x6080ca8; // registry key (address of a static)
-constexpr uintptr_t active = 0xd1;      // u8 != 0 while spectating
-constexpr uintptr_t vehicle = 0xd6;     // u8 vehicle id
+constexpr uintptr_t lo = 0xd0, hi = 0xe8; // the span copied at once, once per scan
+constexpr uintptr_t ui = 0xd0;          // u8 != 0 while the spectator HUD is up                         KB L1
+constexpr uintptr_t active = 0xd1;      // u8 != 0 while spectating                                      in game
+constexpr uintptr_t vehicle = 0xd6;     // u8 vehicle id, 0xff none                                      in game
+constexpr uintptr_t gap = 0xe4;         // u32 the spectator menu's gap mode (logged only)               KB L1
+static_assert(gap + 4 <= hi);
 } // namespace spectate
 
 // ---------------------------------------------------------------- helpers
@@ -242,7 +256,7 @@ struct CarRef {
     uintptr_t ptr = 0;
     uint8_t id = 0;
     uint32_t is_ai = 1;
-    uintptr_t ers = 0; // 0 for cars without ERS (the safety car)
+    uintptr_t ers = 0; // 0 for cars without ERS: the safety car, and every F2 car (competitors: racer())
     uintptr_t tag = 0; // CarLive+0x0, the last placement request's tag (logged only: old_check)
 };
 
@@ -259,8 +273,14 @@ struct F1_25Provider::Impl {
     uint32_t generation = 0;
     uintptr_t player_ptr = 0;
     uint32_t last_count = 0;
-    float last_total = 0;
-    double last_total_time = -1;
+    // the player's progress total at its last kDistMarks changes (ring, newest at dist_head - 1)
+    struct DistMark {
+        float total;
+        double t;
+    };
+    DistMark dist[kDistMarks] = {};
+    int dist_head = 0, dist_n = 0;
+    float dist_speed = 0, dist_window = 0; // the reference at the newest change; window 0 = none
     F1_25Raw raw;
     // The car table as last scanned. Every frame costs one copy of the table's slots; the cars behind them
     // are re-read in full when a slot or the count changes and at kScanPeriod, the player's car every frame.
@@ -271,6 +291,8 @@ struct F1_25Provider::Impl {
     char slot_status[kMaxCars + 1] = {}; // SlotStatus per slot from the last scan (validation log)
     double last_scan = -1e9;
     FieldState order; // running order from the last scan (player_rank is set per frame)
+    size_t entrants = 0;    // the results system's entry count from the last scan, 0 when it was not read
+    bool field_ers = false; // some car in the last scan has ERS (F1); none in F2
     // track name, re-read at kNamePeriod and on a new player car / session
     char name[sizeof(SessionState::track_name)] = {};
     bool name_ok = false;
@@ -286,6 +308,10 @@ struct F1_25Provider::Impl {
     Component results, spectator;
     // who drives which car, from the last scan
     int ctrl_hits = -1, ctrl_vid = -1, spect_vid = -1;
+    SpectateState spect; // the spectator director as read at the last scan (on: decided per frame)
+    // the car the halo follows (the player's, or the watched one): subject_gen bumps when it changes
+    uintptr_t subject_ptr = 0;
+    uint32_t subject_gen = 0, subject_base = ~0u;
 
     // One car from its table slot: a CarLive (its systems container's vptr, its teleport lock pointing into the
     // car itself: see namespace car) whose vehicle id reads back as the slot index. One copy of the car's header,
@@ -399,10 +425,18 @@ struct F1_25Provider::Impl {
         return false;
     }
 
+    // A competitor, not the safety car (which the car table holds too). In F1 the safety car is the only car
+    // without ERS (2026-11-09 23:58 log, 2025 grid: 20 cars with ERS, the safety car without at id 20), so there
+    // only cars with ERS count, as before. In F2 no car has ERS (2026-11-10 00:07 and 01:36 logs: 22 cars and the
+    // safety car all without, the safety car at id 22, 22 results entries): there a car counts when its id is
+    // below the results' entry count, and before the scan's results read (entrants 0) none does. The tower's
+    // Reader::racer uses the entry count in every field.
+    bool racer(const CarRef &c) const { return c.ers || (!field_ers && c.id < entrants); }
+
     // Each car's classification position (scan time): entry +0 must read back the vehicle id, positions must
-    // be 1..count, and no two cars may share one (else nothing is reported). Competitors only, the same rule as
-    // the road order: a car without ERS (the safety car, which the table holds too) is never a rival, and the
-    // results system's entry for its id, if any, is not part of the session's order.
+    // be 1..count, and no two cars may share one (else nothing is reported). Competitors only (racer), the same
+    // rule as the road order: the results system's entry for the safety car's id, if any, is not part of the
+    // session's order.
     void classify(uint32_t count, double now)
     {
         static_assert(results::vec_end == results::vec_begin + sizeof(uintptr_t));
@@ -415,12 +449,13 @@ struct F1_25Provider::Impl {
         uintptr_t entries[64];
         if (!copy(v[0], entries, ne * sizeof(uintptr_t)))
             return;
+        entrants = ne;
         uint64_t seen = 0;
         bool dup = false;
         for (int i = 0; i < n_cars; ++i) {
             const uint8_t vid = cars[i].id;
             uint8_t b[results::hi];
-            if (!cars[i].ers || vid >= ne || !entries[vid] || (entries[vid] & 7) || !copy(entries[vid], b, sizeof b) ||
+            if (!racer(cars[i]) || vid >= ne || !entries[vid] || (entries[vid] & 7) || !copy(entries[vid], b, sizeof b) ||
                 field<uint8_t>(b, 0, results::vehicle) != vid)
                 continue;
             const uint32_t p = (field<uint32_t>(b, 0, results::pos_a) ^ field<uint32_t>(b, 0, results::pos_b)) + 1;
@@ -473,14 +508,32 @@ struct F1_25Provider::Impl {
             ctrl_vid = -1;
     }
 
-    // The spectated car (scan time; logged only).
+    // The spectator director (scan time): one copy of +0xd0..+0xe7. spect_vid (the log's column since 2026-11-09)
+    // keeps its rule: the director active and its car below the table count.
     void read_spectate(uint32_t count, double now)
     {
         spect_vid = -1;
-        uint8_t b[spectate::vehicle + 1 - spectate::active];
-        if (find_component(spectator, sym.spectate_key, now) && copy(spectator.value + spectate::active, b, sizeof b) &&
-            b[0] && b[spectate::vehicle - spectate::active] < count)
-            spect_vid = b[spectate::vehicle - spectate::active];
+        spect = SpectateState{};
+        uint8_t b[spectate::hi - spectate::lo];
+        spect.found = find_component(spectator, sym.spectate_key, now);
+        if (!spect.found || !copy(spectator.value + spectate::lo, b, sizeof b))
+            return;
+        spect.read = true;
+        spect.ui = field<uint8_t>(b, spectate::lo, spectate::ui);
+        spect.active = field<uint8_t>(b, spectate::lo, spectate::active);
+        spect.vehicle = field<uint8_t>(b, spectate::lo, spectate::vehicle);
+        spect.gap = field<uint32_t>(b, spectate::lo, spectate::gap);
+        if (spect.active && spect.vehicle < count)
+            spect_vid = spect.vehicle;
+    }
+
+    // The watched car's index in cars[] while the spectator HUD is up (+0xd0 and +0xd1 set, +0xd6 a car of the
+    // table), else -1: the halo then follows the player.
+    int watched() const
+    {
+        if (!spect.read || !spect.ui || !spect.active || spect.vehicle >= slot_count)
+            return -1;
+        return index_of(spect.vehicle);
     }
 
     int index_of(int vid) const
@@ -497,6 +550,10 @@ struct F1_25Provider::Impl {
         slot_count = 0;
         slot_status[0] = 0;
         order = FieldState{};
+        entrants = 0;
+        field_ers = false;
+        spect = SpectateState{};
+        spect_vid = -1;
     }
 
     // Re-read every car behind the table's slots and rebuild the running order.
@@ -506,20 +563,23 @@ struct F1_25Provider::Impl {
         slot_count = count;
         std::memcpy(slots, now_slots, count * sizeof(uintptr_t));
         n_cars = 0;
+        field_ers = false;
         for (uint32_t i = 0; i < count; ++i) {
             CarRef c;
             const SlotStatus st = read_car_ref(slots[i], i, c);
             slot_status[i] = char(st);
-            if (is_car(st))
+            if (is_car(st)) {
                 cars[n_cars++] = c;
-            else
+                field_ers = field_ers || c.ers;
+            } else
                 ++raw.rejects;
         }
         slot_status[count] = 0;
         read_controllers();
         read_spectate(count, now);
-        // running order by the game's distance-covered counter (cars with ERS: not the safety car)
+        // running order by the game's distance-covered counter (racers only: not the safety car)
         order = FieldState{};
+        entrants = 0;
         if (n_cars)
             classify(count, now);
         uintptr_t begin = 0;
@@ -529,7 +589,7 @@ struct F1_25Provider::Impl {
             return;
         for (int i = 0; i < n_cars; ++i) {
             Progress pr;
-            if (!cars[i].ers || cars[i].id >= entries || !progress_entry(ptrs[cars[i].id], pr))
+            if (!racer(cars[i]) || cars[i].id >= entries || !progress_entry(ptrs[cars[i].id], pr))
                 continue;
             order.id[order.n] = cars[i].id;
             order.total_m[order.n] = pr.total;
@@ -608,6 +668,7 @@ struct F1_25Provider::Impl {
             forget_cars();
             lose_player();
             o.session.generation = generation;
+            o.session.subject = subject_gen;
             return;
         }
         const bool changed = count != slot_count || std::memcmp(now_slots, slots, count * sizeof(uintptr_t)) != 0;
@@ -616,9 +677,12 @@ struct F1_25Provider::Impl {
             scan(now_slots, count, now);
             scanned = true;
         } else {
-            // between scans the player's car itself is still re-read every frame
-            for (int i = 0; i < n_cars; ++i)
-                if (cars[i].ptr == player_ptr) {
+            // between scans the player's car itself is still re-read every frame, and the watched car while the
+            // halo follows it (one header copy each)
+            const int w = watched();
+            const uintptr_t follow = w >= 0 ? cars[w].ptr : 0;
+            for (int i = 0; i < n_cars && !scanned; ++i)
+                if (cars[i].ptr == player_ptr || (follow && cars[i].ptr == follow)) {
                     CarRef c;
                     const SlotStatus st = read_car_ref(slots[cars[i].id], cars[i].id, c);
                     if (is_car(st)) {
@@ -627,7 +691,6 @@ struct F1_25Provider::Impl {
                         scan(now_slots, count, now);
                         scanned = true;
                     }
-                    break;
                 }
         }
         raw.scanned = scanned;
@@ -640,27 +703,43 @@ struct F1_25Provider::Impl {
         o.session.active = n_cars > 0;
         bool ai_driving = false;
         const int me = find_player(ai_driving);
+        o.spectate = spect; // the director as read at the last scan (logged); on: below
         if (me < 0) {
             lose_player();
             o.session.generation = generation;
+            o.session.subject = subject_gen;
             return;
         }
         if (cars[me].ptr != player_ptr || count != last_count) {
             ++generation;
-            last_total_time = -1;
+            dist_n = 0;
         }
         last_count = count;
         o.session.generation = generation;
         player_ptr = cars[me].ptr;
         raw.old_check = int8_t(!(cars[me].tag & 7) && mem::in_image(cars[me].tag));
+        // the car the halo follows: the watched one while the spectator HUD is up, else the player's. A switch bumps
+        // the subject generation only (the halo starts afresh); the car set's generation (the tower's) stays.
+        const int w = watched();
+        const int sub = w >= 0 ? w : me;
+        if (cars[sub].ptr != subject_ptr || generation != subject_base) {
+            ++subject_gen;
+            subject_ptr = cars[sub].ptr;
+            subject_base = generation;
+            dist_n = 0;
+        }
+        o.session.subject = subject_gen;
+        o.spectate.on = w >= 0;
         read_track_name(now, o.session);
-        read_player(cars[me], ai_driving, o);
+        read_car(cars[sub], sub == me ? ai_driving : cars[sub].is_ai != 0, o);
+        o.vehicle.player = sub == me;
+        o.vehicle.player_id = cars[me].id;
         // re-validated after the reads (static-validation.md, safe read plan step 6): a car destroyed or moved
-        // to another slot meanwhile discards this frame's car values
+        // to another slot meanwhile discards this frame's car values (never replaced by another car's)
         uintptr_t slot_now = 0;
         uint8_t id_now = 0xff;
-        if (!rd(sym.vehicle_table + size_t(cars[me].id) * sizeof(uintptr_t), slot_now) || slot_now != cars[me].ptr ||
-            !rd(cars[me].ptr + car::vehicle_id, id_now) || id_now != cars[me].id) {
+        if (!rd(sym.vehicle_table + size_t(cars[sub].id) * sizeof(uintptr_t), slot_now) || slot_now != cars[sub].ptr ||
+            !rd(cars[sub].ptr + car::vehicle_id, id_now) || id_now != cars[sub].id) {
             o.vehicle = VehicleState{};
             o.power_unit = PowerUnitState{};
             o.energy = EnergyState{};
@@ -669,14 +748,14 @@ struct F1_25Provider::Impl {
             return;
         }
 
-        // the player's own progress every frame; the field's order from the last scan
+        // the followed car's own progress every frame; the field's order from the last scan
         uintptr_t begin = 0, linked = 0;
         size_t entries = 0;
         Progress pr;
-        if (progress_table(begin, entries) && progress_of(begin, entries, cars[me].id, pr)) {
+        if (progress_table(begin, entries) && progress_of(begin, entries, cars[sub].id, pr)) {
             // the entry's link back to the car is logged, not required, until a drive confirms it (T8)
             raw.progress_link = pr.vehicle && !(pr.vehicle & 7) && rd(pr.vehicle + progress::vehicle_car, linked) &&
-                                linked == cars[me].ptr;
+                                linked == cars[sub].ptr;
             o.progress.total_m = pr.total;
             o.progress.lap = pr.lap;
             if (o.session.track_ok) {
@@ -684,17 +763,14 @@ struct F1_25Provider::Impl {
                 o.progress.ok = true;
                 o.progress.lap_m = std::clamp(pr.total - float(pr.plap) * L, 0.f, L);
             }
-            if (last_total_time >= 0 && now - last_total_time > 0.004 && now - last_total_time < 1.0)
-                raw.speed_from_distance = float((pr.total - last_total) / (now - last_total_time));
-            last_total = pr.total;
-            last_total_time = now;
+            distance_reference(pr.total, now);
         }
         o.field = order;
         for (int i = 0; i < order.n; ++i)
-            if (order.id[i] == cars[me].id)
+            if (order.id[i] == cars[sub].id)
                 o.field.player_rank = i;
         o.field.ok = o.field.n > 0 && o.field.player_rank >= 0;
-        o.field.classified = order.classified && order.pos[cars[me].id] > 0;
+        o.field.classified = order.classified && order.pos[cars[sub].id] > 0;
     }
 
     // The loaded track's internal name: [[[track_world]+0xd0]+0xe8]+0xa0 -> char * (the ERS reader's
@@ -716,17 +792,59 @@ struct F1_25Provider::Impl {
         }
     }
 
+    // Speed along the track from the progress total, for the validation log only (raw.speed_from_distance): the
+    // distance between two changes of the total >= kDistWindow apart over the time between them. Both ends are
+    // changes, so the frames between simulation steps add no error. O(1) per frame: one comparison, and on a
+    // change one push and a trim that drops each mark once.
+    void distance_reference(float total, double now)
+    {
+        constexpr int mask = kDistMarks - 1;
+        if (dist_n > 0) {
+            const DistMark &last = dist[(dist_head - 1) & mask];
+            const double dt = now - last.t;
+            if (total == last.total) { // no simulation step since the last change
+                if (dt < kDistStale && dt >= 0) {
+                    raw.speed_from_distance = dist_speed;
+                    raw.distance_window = dist_window;
+                }
+                return;
+            }
+            if (dt >= kDistStale || dt <= 0 || std::fabs(total - last.total) > kDistMaxSpeed * float(dt) + 1.f)
+                dist_n = 0;
+        }
+        if (dist_n == 0)
+            dist_speed = dist_window = 0;
+        dist[dist_head] = {total, now};
+        dist_head = (dist_head + 1) & mask;
+        dist_n = std::min(dist_n + 1, kDistMarks);
+        while (dist_n > 2 && now - dist[(dist_head - dist_n + 1) & mask].t >= kDistWindow)
+            --dist_n; // the second-oldest mark is far enough back: the oldest is not needed
+        const DistMark &old = dist[(dist_head - dist_n) & mask];
+        if (now - old.t >= kDistWindow) {
+            dist_window = float(now - old.t);
+            dist_speed = float((double(total) - double(old.total)) / (now - old.t));
+        }
+        raw.speed_from_distance = dist_speed;
+        raw.distance_window = dist_window;
+    }
+
     void lose_player()
     {
         if (player_ptr) {
             player_ptr = 0;
             ++generation;
         }
+        if (subject_ptr) {
+            subject_ptr = 0;
+            ++subject_gen;
+        }
         last_count = 0;
-        last_total_time = -1;
+        dist_n = 0;
     }
 
-    void read_player(const CarRef &c, bool ai_driving, GameState &o)
+    // One car's values (the car the halo follows): its systems as read from this car only. A system that is
+    // missing or fails its checks leaves its values not ok.
+    void read_car(const CarRef &c, bool ai_driving, GameState &o)
     {
         uint8_t live[car::hi - car::lo];
         if (!copy(c.ptr + car::lo, live, sizeof live))

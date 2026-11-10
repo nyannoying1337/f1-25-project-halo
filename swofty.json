@@ -2,10 +2,10 @@
   "schema_version": 1,
   "id": "nick.f1-2026-halo",
   "name": "Project Halo",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "nyannoying",
   "icon": "icons/halo.png",
-  "description": "The 2026 F1 world feed's onboard halo graphic in place of the 2026 dial, drawn by the game's own HUD: move and resize it in HUD customisation. Read from the running game itself: no UDP telemetry, no companion app.",
+  "description": "The 2026 F1 world feed's onboard halo and a broadcast-style timing tower, drawn by F1 25's own HUD in 2026, 2025 and F2 cars: move and resize them in HUD customisation. Read from the running game itself: no UDP telemetry, no companion app.",
   "license": "LicenseRef-Project-Halo-Attribution-1.0",
   "homepage": "https://github.com/nyannoying1337/f1-25-project-halo",
   "repository": "https://github.com/nyannoying1337/f1-25-project-halo",
@@ -45,12 +45,150 @@
       "description": "The next turn's number and direction, from 220 m before it."
     },
     {
+      "id": "g_meter",
+      "type": "toggle",
+      "label": "G-force meter",
+      "default": false,
+      "binds": "native",
+      "description": "Replaces the speed, BOOST, OVERTAKE, battery and RECHARGE / DEPLOY in the middle of the halo with the 2026 broadcast's G-force meter: the cornering, braking and acceleration force in g, and a cyan arc on the side it pushes the driver."
+    },
+    {
+      "id": "all_cars",
+      "type": "toggle",
+      "label": "Halo in 2025 and F2 cars",
+      "default": true,
+      "binds": "native",
+      "description": "The halo in F1 25's 2025 cars and in F2 cars too, in place of their dials. 2025 cars: DRS, the ERS deploy mode, the battery and RECHARGE / DEPLOY. F2 cars: DRS, no energy parts. Off: their own dials come back. 2026 cars always show the halo."
+    },
+    {
       "id": "validation_log",
       "type": "toggle",
       "label": "Validation log",
       "default": false,
       "binds": "native",
-      "description": "Off by default. Writes what the halo reads from the game, 30 times a second, as CSV to %LOCALAPPDATA%\\nick.f1-2026-halo\\diag (up to 64 MB per launch). Turn on only to send a log."
+      "description": "Off by default. Records what the halo and the timing tower read from the game to %LOCALAPPDATA%\\nick.f1-2026-halo\\diag as CSV (two files, up to 64 MB each per launch) and shows a status line under the tower. Turn on only to send a log."
+    },
+    {
+      "id": "tower_on",
+      "type": "toggle",
+      "label": "Timing tower",
+      "default": true,
+      "binds": "native",
+      "description": "A broadcast-style timing tower from the game's own classification, in place of the Track Position list: move, resize or hide it in HUD customisation. Practice, qualifying, races and Time Trial."
+    },
+    {
+      "id": "tower_mode",
+      "type": "choice",
+      "label": "Tower layout",
+      "values": [
+        {
+          "value": "compact",
+          "label": "Around me"
+        },
+        {
+          "value": "top",
+          "label": "Leaders"
+        },
+        {
+          "value": "full",
+          "label": "Full field"
+        }
+      ],
+      "default": "compact",
+      "binds": "native",
+      "description": "Around me: the rows around your position. Leaders: the top of the order. Full field: every classified car. Tower rows sets how many rows Around me and Leaders show."
+    },
+    {
+      "id": "tower_rows",
+      "type": "slider",
+      "label": "Tower rows",
+      "min": 3,
+      "max": 22,
+      "step": 1,
+      "default": 5,
+      "binds": "native",
+      "description": "How many rows Around me and Leaders show."
+    },
+    {
+      "id": "tower_header",
+      "type": "toggle",
+      "label": "Tower header",
+      "default": true,
+      "binds": "native",
+      "description": "The logo and the lap counter in races, the session name in practice and qualifying, TIME TRIAL and the lap in Time Trial, and the safety car, virtual safety car and chequered flag states."
+    },
+    {
+      "id": "tower_tyres",
+      "type": "toggle",
+      "label": "Tyres",
+      "default": true,
+      "binds": "native",
+      "description": "Each car's current tyre: S, M, H, I or W."
+    },
+    {
+      "id": "tower_arrows",
+      "type": "toggle",
+      "label": "Position arrows",
+      "default": true,
+      "binds": "native",
+      "description": "A green or red arrow for 4 seconds when a car gains or loses a place."
+    },
+    {
+      "id": "tower_gaps",
+      "type": "toggle",
+      "label": "Intervals",
+      "default": true,
+      "binds": "native",
+      "description": "The gap column: times in races (see Gap mode), and PIT, Out, DSQ and NC. Practice and qualifying times are not shown yet."
+    },
+    {
+      "id": "tower_gap_mode",
+      "type": "choice",
+      "label": "Gap mode",
+      "values": [
+        {
+          "value": "interval",
+          "label": "Interval"
+        },
+        {
+          "value": "leader",
+          "label": "Leader"
+        },
+        {
+          "value": "auto",
+          "label": "Auto"
+        }
+      ],
+      "default": "interval",
+      "binds": "native",
+      "description": "Interval: time to the car ahead. Leader: time to the leader. Auto: switches between the two. Lapped cars show +1 LAP."
+    },
+    {
+      "id": "tower_auto_s",
+      "type": "slider",
+      "label": "Auto switch every (s)",
+      "min": 5,
+      "max": 60,
+      "step": 5,
+      "default": 10,
+      "binds": "native",
+      "description": "Seconds between Interval and Leader when Gap mode is Auto."
+    },
+    {
+      "id": "tower_team_colours",
+      "type": "toggle",
+      "label": "Team logos",
+      "default": true,
+      "binds": "native",
+      "description": "Shows each driver's team logo next to the name."
+    },
+    {
+      "id": "tower_highlight",
+      "type": "toggle",
+      "label": "Highlight my row",
+      "default": true,
+      "binds": "native",
+      "description": "Your own row a little brighter."
     }
   ],
   "operations": {

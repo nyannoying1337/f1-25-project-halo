@@ -14,7 +14,8 @@ $long = [regex]::Matches((Get-Content "$PSScriptRoot\swofty.json" -Raw -Encoding
     Where-Object { [Text.Encoding]::UTF8.GetByteCount($_.Value) - 2 -gt 255 }
 if ($long) { throw "swofty.json has a string over 255 bytes: $($long[0].Value.Substring(0, 70))..." }
 
-$erps = "halo_scene.erp", "halo_template.erp", "halo_spectator.erp"
+$erps = "halo_scene.erp", "halo_template.erp", "halo_spectator.erp", "tower_scene.erp", "tower_template.erp",
+    "tower_replay.erp", "tower_replay_scene.erp", "tower_spectator.erp"
 $missing = @($erps | Where-Object { -not (Test-Path "$PSScriptRoot\erp\$_") })
 if ($missing) { throw "erp\$($missing[0]) is missing: take the erp folder from a release zip or rebuild it (README.md, Build)" }
 

@@ -10,29 +10,62 @@ namespace {
 float ease(float x, float target, float dt, float tau) { return target + (x - target) * std::exp(-dt / tau); }
 
 constexpr float kMguKLimit = 350e3f;  // W, the 2026 MGU-K limit: the scale when the car's own limit is unreadable
+constexpr float kMguK2025 = 120e3f;   // W, the 2025 cars' capsule scale (docs/halo-car-classes.md 7; their logged peak 119.985 kW)
 constexpr float kPowerFloor = 2e3f;   // W below which the capsules stay dark (sensor noise, coasting)
 constexpr float kPedalTau = 0.035f;   // s
 constexpr uint32_t kTimeTrial = 18; // session type 0x12: the game never updates positions there
 constexpr float kPowerTau = 0.02f;    // s: the broadcast fills change within one 25 fps frame (docs/research 3.5)
+constexpr float kGravity = 9.80665f;  // m/s^2 per g
+constexpr float kLearnSpeed = 10.f;   // m/s: slower, g noise over speed^2 swamps the curvature
+constexpr float kLearnStep = 20.f;    // m: a larger move between two frames is a restart or a teleport
 
 } // namespace
+
+// The player's own path teaches the turn list where the game's corners are (halo_track.hpp): one curvature
+// sample each time the lap distance moves on (a simulation step; none while paused), driving forward at speed,
+// with the player at the wheel (the AI's pit-lane drive is not the racing line). Only the player's own car: a car
+// the spectator HUD watches never teaches it (its g is validated for the player's car only).
+void HudModel::learn_bends(const gs::GameState &s)
+{
+    const float d = s.progress.lap_m, len = s.session.track_length_m;
+    if (d == learn_lap_m_)
+        return;
+    const float moved = d - learn_lap_m_;
+    const bool forward = learn_lap_m_ >= 0 && (moved > 0 ? moved < kLearnStep : moved + len < kLearnStep);
+    learn_lap_m_ = d;
+    const float v = s.vehicle.speed_mps;
+    if (forward && s.vehicle.player && s.vehicle.speed_ok && s.vehicle.accel_ok && !s.vehicle.ai_driving &&
+        v >= kLearnSpeed)
+        corners_.feed_curvature(d, s.vehicle.g_lat * kGravity / (v * v));
+}
 
 void HudModel::update(const gs::GameState &s, double dt, const HudConfig &cfg)
 {
     View &v = view_;
+    clock_ += std::max(0.0, dt);
     const float fdt = float(std::clamp(dt, 0.0, 0.1));
-    if (s.session.generation != generation_) { // new session, restart, other car: nothing carries over
-        generation_ = s.session.generation;
+    // new session, restart, other car (also the spectator's next watched car): nothing carries over
+    if (s.session.subject != generation_) {
+        generation_ = s.session.subject;
         v = View{};
         e_n_ = 0;
+        gmeter_.reset();
     }
     v.live = s.compatible && s.session.active && s.vehicle.ok;
     v.race = s.session.race();
     v.names = cfg.show_names;
+    v.all_cars = cfg.all_cars;
+    // G-force meter: the car's own acceleration, filtered (gmeter.hpp); no value without a validated reading. Off
+    // while spectating (docs/spectator-ui.md §3.3): the speed centre shows instead, since the game's g is validated
+    // for the player's car only (in-game logs)
+    gmeter_.update(cfg.g_meter && !s.spectate.on, v.live && s.vehicle.accel_ok, s.vehicle.g_lat, s.vehicle.g_long, fdt);
+    v.gmeter = gmeter_.view();
     if (!v.live) {
         v = View{};
         v.race = s.session.race();
         v.names = cfg.show_names;
+        v.all_cars = cfg.all_cars;
+        v.gmeter = gmeter_.view();
         return;
     }
 
@@ -85,6 +118,12 @@ void HudModel::update(const gs::GameState &s, double dt, const HudConfig &cfg)
     const float dp = have ? std::clamp((net - kPowerFloor) / limit, 0.f, 1.f) : 0.f;
     v.recharge = ease(v.recharge, rc, fdt, kPowerTau);
     v.deploy = ease(v.deploy, dp, fdt, kPowerTau);
+    // the 2025 cars' capsules (the hud_f1_dial halo binds them): the same power on a fixed scale, so the DLL needs
+    // no car class; the 2026 halo keeps the car's own limit above
+    const float rc25 = have ? std::clamp((-net - kPowerFloor) / kMguK2025, 0.f, 1.f) : 0.f;
+    const float dp25 = have ? std::clamp((net - kPowerFloor) / kMguK2025, 0.f, 1.f) : 0.f;
+    v.recharge25 = ease(v.recharge25, rc25, fdt, kPowerTau);
+    v.deploy25 = ease(v.deploy25, dp25, fdt, kPowerTau);
 
     // Boost: the driver has the game's on-demand maximum-deployment mode selected
     v.boost = s.energy.mode_ok && s.energy.mode == 2;
@@ -97,7 +136,10 @@ void HudModel::update(const gs::GameState &s, double dt, const HudConfig &cfg)
         if (track_key_ != key) {
             track_key_ = key;
             corners_.reset(s.session.track_name_ok ? s.session.track_name : "", s.session.track_length_m);
+            learn_lap_m_ = -1;
         }
+        learn_bends(s);
+        corners_.update(clock_);
         char label[8] = {};
         bool right = false;
         if (corners_.current(s.progress.lap_m, label, sizeof label, &right)) {

@@ -1,12 +1,15 @@
 // sim.js — draws the built native scene (halo subtree of dial_om_xm.idf) the way the game composes it:
-// quads (mesh 4.48 x 1.92, texture row 0 at the top), eWindow clips, eMaskTexture alpha masks, anim clips driven by
-// fractions, template visibility and text bindings. Text uses Saira as a stand-in for the game's F1 font.
+// quads (each drawn over its scene mesh: 4.48 x 1.92, the F2 dial's edge quad 3.4 x 1.68; texture row 0 at the top),
+// eWindow clips, eMaskTexture alpha masks, anim clips driven by
+// fractions, template visibility (over the scene's isHidden) and text bindings. Text uses Saira as a stand-in for the game's F1 font.
 (async () => {
   const D = window.SIM, PX = D.px, out = document.getElementById('status');
   const imgs = {};
   await Promise.all(D.sprites.map(n => new Promise((ok, bad) => { const i = new Image(); i.onload = () => { imgs[n] = i; ok(); }; i.onerror = () => bad(new Error('img ' + n)); i.src = D.png + n + '.png'; })));
   await document.fonts.load('700 40px SimSaira');
   const info = D.scene.info;
+  // the elements the template tints with the team colour (sprite drawn white, then tinted); the car-class copies pass theirs
+  const TINT = D.tint || { halo_rails: 'rails', halo_rpm_fill: 'solid_white' };
 
   function tinted(name, col) {
     const key = name + col; if (imgs[key]) return imgs[key];
@@ -32,7 +35,8 @@
     // leaves the DLL would write, plus the native VM values
     const leaf = st.leaves || {};
     const short = b => (b.includes('hud_halo_') ? b.split('hud_halo_')[1] : b);   // our VM leaves by short name; game bindings stay unresolved
-    const visOf = {}; for (const [, el, lf, neg] of info.vis) { const v = leaf[short(lf)]; visOf[el] = v === undefined ? neg : (neg ? !v : !!v); }
+    const visOf = {}; for (const [, el, lf, neg] of info.vis.concat(info.ctl || [])) { const v = leaf[short(lf)]; visOf[el] = v === undefined ? neg : (neg ? !v : !!v); }
+    Object.assign(visOf, st.shows || {});   // car-class copies: what the template's decision nodes show or hide (DRS pill, ERS mode)
     const textOf = {};
     for (const [, el, tdb, vdb, vdef, neg] of info.texts) {
       const ours = tdb.includes('hud_halo_'), key = ours ? tdb.split('hud_halo_')[1] : tdb;
@@ -56,14 +60,14 @@
       if (n.type !== 'quad') g2.scale(n.scale[0], n.scale[1]);
     }
     function draw(g2, n, L) {
-      if (visOf[n.name] === false) return;
+      if (visOf[n.name] === false || (n.hidden && visOf[n.name] === undefined)) return;   // a bound visible wins over isHidden
       g2.save(); local(g2, n);
       if (n.type === 'eWindow') { g2.beginPath(); g2.rect(-n.w / 2, -n.h / 2, n.w, n.h); g2.clip(); }
       if (n.type === 'quad' && n.layer === L) {
         let im = imgs[n.sprite];
-        if (n.name === 'halo_rails') im = tinted('rails', team);
-        if (n.name === 'halo_rpm_fill') im = tinted('solid_white', team);
-        g2.save(); g2.scale(1, -1); g2.drawImage(im, -2.24, -0.96, 4.48, 1.92); g2.restore();
+        if (TINT[n.name]) im = tinted(TINT[n.name], team);
+        const mw = n.mw || 4.48, mh = n.mh || 1.92;   // the quad's mesh size (scene_dump: from its extents)
+        g2.save(); g2.scale(1, -1); g2.drawImage(im, -mw / 2, -mh / 2, mw, mh); g2.restore();
       }
       if (n.type === 'eText' && n.layer === L && textOf[n.name]) {
         const em = n.style.match(/(\d+)_/)[1] / 100, u = em / 100;   // draw at 100 px and scale down

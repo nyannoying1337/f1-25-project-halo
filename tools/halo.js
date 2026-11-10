@@ -52,6 +52,17 @@ const HALO = (() => {
     band: { dx: 0.65, dy: 5.0 },
     wings: { L: { xi: -71.17, tilt: 3.9, top: 5.0, bot: 3.5, r: 3.4, xFar: -215 },
              R: { xi: 71.65, tilt: 9.8, top: 1.8, bot: 5.0, r: 3.4, xFar: 220 } },
+    // G-force variant (optional, off by default; docs/gmeter/design.md). Measured on the Spa clip (Belgian GP Q2,
+    // 18 Jul 2026, 640x360) in this plane D, with the outer ring = the rim (35.0). Angles: 0 = right, 90 = down.
+    // rings: the three inner rings; val: the speed digits' size (cap 9.3 measured) with tighter tracking (Saira is
+    // wider than the broadcast face: '4.5' ink 23 units); arc: cyan, built from whole segments of `seg` degrees
+    // (edges at 22.5 + 45k): the two segments nearest the felt-force direction, three centred on it when wide;
+    // white / red: bars of half-height halfH on the nearest axis (right, down, left, up), between the rings;
+    // thresholds in g: indicator from `on`, wide arc from `wide`, red bar from `redOn`, red digits `digitsRed`.
+    gm: { rings: [28.41, 23.41, 17.27], ringW: 0.5,
+          val: { y: 0.0, fs: 13.529, tr: -0.45, sx: 1.0 }, lbl: { y: 7.0, fs: 3.6, tr: 0.25 },
+          arc: { r0: 12.0, r1: 17.0, seg: 45 }, white: { r0: 17.8, r1: 22.9, halfH: 7.3 }, red: { r0: 23.9, r1: 27.9, halfH: 7.3 },
+          on: 0.3, wide: 2.0, redOn: 2.3, digitsRed: 4.3 },
   };
 
   const P = {
@@ -74,7 +85,48 @@ const HALO = (() => {
     throttle: '#18D6A0', throttleTop: '#26DCA9', brake: '#E2566A', brakeTop: '#EC6A7C',
     battLine: '#4FB8E1', battFillTop: '#1489D6', battFillBot: '#0F7DCB', battIn: '#235079', battCharge: '#0E4877', bolt: '#4FE0F5',
     aeroOn: '#45E4D4', aeroBar: '#C9D3D8', gearDim: 'rgba(205,216,222,0.86)', track: 'rgba(160,182,195,0.55)', gearLbl: '#C9D5DD',
-    gRing: 'rgba(206,150,182,0.75)', gTeal: '#3FD3CC', gWhite: '#F5F7F8', gRed: '#F0444E',
+    // G-force variant: Spa clip samples (360p, compressed) cyan (125-134, 209-222, 220-228), white (228, 234, 238),
+    // red block (226, 118, 130), lifted a little toward the source colours like the slats; rings are sub-pixel there
+    gRing: 'rgba(196,172,208,0.62)', gCyan: '#86DDE6', gWhite: '#F2F6F8', gRed: '#EE5866',
+  };
+
+  // ---------- car classes (docs/halo-car-classes.md). st.carClass picks which car's halo is drawn:
+  //   '2026' (default, also when unset): today's halo, unchanged;
+  //   '2025': F1 25's own 2025 cars: a DRS pill in place of the active-aero symbol, the ERS deploy mode in the
+  //           Boost / Overtake area, capsules on the 2025 MGU-K scale (capsKW);
+  //   'f2':   the same halo without battery, capsules and pills, plus the DRS pill.
+  // capsKW is the power a full capsule stands for: the DLL's scale for st.recharge / st.deploy (level = kW / capsKW).
+  // The variant parts' geometry and colours live in GV / PV, not in G / P, so the 2026 export header is unchanged.
+  const CLASSES = {
+    '2026': { aero: true, drs: false, battery: true, capsules: true, capsKW: 350, pills: 'boost_ot' },
+    '2025': { aero: false, drs: true, battery: true, capsules: true, capsKW: 120, pills: 'ers_mode' },
+    f2: { aero: false, drs: true, battery: false, capsules: false, capsKW: null, pills: null },
+  };
+  const carClass = st => CLASSES[st && st.carClass] || CLASSES['2026'];
+  // st.drs: the pill's look ('off' | 'avail' | 'open') or the game's drs_pit_state (docs/halo-car-classes.md 2.3).
+  // drs_distance and drs_active show the outline (a proposal, doc 6.1); the pit limiter states show grey.
+  const DRS_LOOK = { off: 'off', avail: 'avail', open: 'open', invalid: 'off', drs_unavailable: 'off', drs_distance: 'avail',
+                     drs_active: 'avail', drs_live: 'open', pit_distance: 'off', pit_active: 'off', pit_live: 'off' };
+  const drsLook = st => DRS_LOOK[st && st.drs] || 'off';
+  // st.ersMode: the game's ers_mode (ui32, view-model order 0 None, 1 Medium, 2 Hotlap, 3 Overtake) or the name
+  const ERS_MODES = ['NONE', 'MEDIUM', 'HOTLAP', 'OVERTAKE'];
+  const ersModeIndex = st => {
+    const m = st && st.ersMode, i = typeof m === 'string' ? ERS_MODES.indexOf(m.toUpperCase()) : m;
+    return Number.isInteger(i) && i >= 0 && i < ERS_MODES.length ? i : null;
+  };
+  const GV = {
+    // DRS pill: in the active-aero spot on the right wing, sheared with the wing like the ACTIVE AERO label
+    drs: { x: 86.9, y: 11.9, w: 17.6, h: 7.2, r: 1.5, fs: 5.1, tr: 0.62, rot: 16.347, lean: 13.047, line: 0.8 },
+    // ERS deploy mode (2025): the caption takes the Boost slot, the mode pill the Overtake slot (the OVERTAKE pill's size)
+    ersCap: { y: -2.617, fs: 3.938, tr: 0.5 },
+    ersPill: { y: 4.718, w: 46.629, h: 5.05, r: 1, fs: 3.924, tr: 0.243 },
+  };
+  const PV = {
+    // DRS: grey = the OVERTAKE pill's off look; available = a white outline; open = the game's own DRS green
+    // (rgba(34,188,52): the stock DRS bar's drs_rad_green key, dial_pit_lane_slider.idf drs_rad_bg frame 40)
+    drsOff: 'rgba(92,101,108,0.92)', drsOffLine: 'rgba(130,140,148,0.8)', drsOffText: '#283035',
+    drsAvailFill: 'rgba(8,20,30,0.45)', drsAvailLine: '#F4F7F8', drsAvailText: '#F4F7F8',
+    drsOpen: '#22BC34', drsOpenLine: '#8CF09A', drsOpenText: '#04240B', drsOpenGlow: 'rgba(60,220,90,0.32)',
   };
 
   // ---------- text
@@ -337,35 +389,104 @@ const HALO = (() => {
       text(g, 'OVERTAKE', 0, O.y, O.fs, P.otOffText, { tr: O.tr });
     }
   }
+  // ERS deploy mode (2025 cars): caption in the Boost slot, the mode in a pill in the Overtake slot. NONE uses the
+  // OVERTAKE pill's off look, MEDIUM the unlit Boost look, HOTLAP the lit Boost look, OVERTAKE the lit OVERTAKE pill.
+  function drawErsCaption(g) { const c = GV.ersCap; text(g, 'ERS MODE', 0, c.y, c.fs, P.dim, { tr: c.tr }); }
+  function drawErsMode(g, mode) {
+    if (mode === 3) return drawOT(g, true);
+    const E = GV.ersPill, ox = -E.w / 2, oy = E.y - E.h / 2;
+    const look = [[P.otOff, P.otOffLine, P.otOffText, 0.5], [P.boostFill, P.boostLine, P.boostText, 0.4],
+                  [P.boostOn, P.boostOnLine, P.boostOnText, 0.4]][mode];
+    if (!look) return;
+    rr(g, ox, oy, E.w, E.h, E.r); g.fillStyle = look[0]; g.fill(); g.strokeStyle = look[1]; g.lineWidth = look[3]; g.stroke();
+    text(g, ERS_MODES[mode], 0, E.y, E.fs, look[2], { tr: E.tr, w: mode === 2 ? 760 : 700 });
+  }
   const speedText = (g, kmh) => text(g, String(Math.round(kmh)), 0, G.speed.y, G.speed.fs, P.white, { tr: G.speed.tr, sx: G.speed.sx, w: 780 });
   const mphText = (g, kmh) => text(g, String(Math.round(kmh * 0.621371)), 0, G.mph.y, G.mph.fs, P.white, { tr: G.mph.tr, sx: G.mph.sx, w: 780 });
   function drawDial(g, st) {
+    const C = carClass(st);
     drawDisc(g);
-    if (st.mode === 'spa') return drawGDial(g, st);
+    if (gOn(st)) return drawGDial(g, st);
     text(g, 'KM/H', 0, G.kmh.y, G.kmh.fs, P.label, { tr: G.kmh.tr });
     speedText(g, st.kmh);
-    drawBoost(g, st.boost);
-    drawOT(g, st.ot);
+    if (C.pills === 'boost_ot') { drawBoost(g, st.boost); drawOT(g, st.ot); }
+    else if (C.pills === 'ers_mode') { drawErsCaption(g); drawErsMode(g, ersModeIndex(st)); }
     mphText(g, st.kmh);
     text(g, 'MPH', 0, G.mphLbl.y, G.mphLbl.fs, P.label, { tr: G.mphLbl.tr });
-    drawBattery(g, st.soc, st.recharge > 0.3);
+    if (C.battery) drawBattery(g, st.soc, st.recharge > 0.3);
   }
 
-  function drawGStatic(g) {
-    [32.2, 27.6, 23.0, 17.8].forEach(r => { g.beginPath(); g.arc(0, 0, r, 0, 7); g.strokeStyle = P.gRing; g.lineWidth = 0.4; g.stroke(); });
-    text(g, 'G-FORCE', 0, 5.2, 2.7, P.label, { tr: 0.3 });
+  // ---------- G-force variant (optional, off by default): st.gmeter === true (st.mode === 'spa' is the old name).
+  // The Spa 2026 world feed's centre: no speed, BOOST / OVERTAKE, battery or RECHARGE / DEPLOY; three rings, the value
+  // and an indicator drawn toward the force the driver feels (a left-hand corner pushes it right, braking pushes it up).
+  // State: st.gLat / st.gLong in the game's convention (g; lat + = toward the car's left, long + = speeding up), or
+  // st.g (magnitude) with st.gDir (felt-force direction, degrees: 0 right, 90 down = speeding up, -90 up = braking).
+  // st.gOk === false, or no g at all, = unavailable: no value and no indicator, label dimmed. st.gWide and
+  // st.gRedDigits override the model's hysteresis / flash (the renderer is stateless); see docs/gmeter/design.md.
+  const gOn = st => !!st && (st.gmeter === true || st.mode === 'spa');
+  const gFormat = m => Math.min(9.9, Math.max(0, Math.round(m * 10) / 10)).toFixed(1);
+  function gView(st) {
+    const M = G.gm;
+    let m = st.g, dir = st.gDir;
+    if (Number.isFinite(st.gLat) && Number.isFinite(st.gLong)) { m = Math.hypot(st.gLat, st.gLong); dir = Math.atan2(st.gLong, st.gLat) / D; }
+    if (st.gOk === false || !Number.isFinite(m)) return { ok: false };
+    if (!Number.isFinite(dir)) dir = 0;
+    const axis = ((Math.round(dir / 90) * 90) % 360 + 360) % 360;   // nearest of right / down / left / up
+    const wide = st.gWide ?? m >= M.wide, S = M.arc.seg, n = Math.round(360 / S);
+    // cyan arc = whole segments (segment k is centred on k * seg degrees): the two nearest dir, or three centred on it
+    const k = wide ? Math.round(dir / S) - 1 : Math.floor(dir / S), count = wide ? 3 : 2;
+    const segs = Array.from({ length: count }, (_, i) => (((k + i) % n) + n) % n);
+    return { ok: true, g: m, dir, axis, segs, arcFrom: (k - 0.5) * S, arcTo: (k + count - 0.5) * S,
+             arc: m >= M.on, wide, red: m >= M.redOn, digitsRed: st.gRedDigits ?? m >= M.digitsRed };
   }
-  const gText = (g, m) => text(g, m.toFixed(1), 0, -1.6, 9.6, P.white, { tr: 0.4, sx: 1.05, w: 780 });
+  function drawGRings(g) { G.gm.rings.forEach(r => { g.beginPath(); g.arc(0, 0, r, 0, 7); g.strokeStyle = P.gRing; g.lineWidth = G.gm.ringW; g.stroke(); }); }
+  function drawGLabel(g, dim) { const L = G.gm.lbl; text(g, 'G-FORCE', 0, L.y, L.fs, dim ? P.dim : P.label, { tr: L.tr }); }
+  function drawGStatic(g) { drawGRings(g); drawGLabel(g, false); }   // the variant's fixed layer (with drawDisc)
+  // the value "d.d" in fixed slots: each digit centred in the widest digit's advance, so the value does not shift
+  // sideways as it changes (Saira's figures are proportional: "1" is 6.2 units wide, "8" 10.9). The game draws it
+  // from one sprite per digit and place (tools/export_native.js), which needs exactly this layout.
+  function gSlots(g) {
+    const V = G.gm.val, prevW = WEIGHT; WEIGHT = 780; g.save();
+    const a = Object.fromEntries([...'0123456789.'].map(ch => [ch, adv(g, ch, V.fs)[0]]));
+    g.restore(); WEIGHT = prevW;
+    const A = Math.max(...[...'0123456789'].map(ch => a[ch])), w = 2 * A + a['.'] + 2 * V.tr, x0 = -w / 2;
+    return { adv: a, A, w, units: x0, dot: x0 + A + V.tr, tenths: x0 + A + V.tr + a['.'] + V.tr };
+  }
+  function gChar(g, ch, x, red) {
+    const V = G.gm.val; text(g, ch, x * V.sx, V.y, V.fs, red ? P.gRed : P.white, { align: 'left', sx: V.sx, w: 780 });
+  }
+  function gText(g, m, red) {
+    const L = gSlots(g), s = gFormat(m);
+    gChar(g, s[0], L.units + (L.A - L.adv[s[0]]) / 2, red);
+    gChar(g, '.', L.dot, red);
+    gChar(g, s[2], L.tenths + (L.A - L.adv[s[2]]) / 2, red);
+    return L.w * G.gm.val.sx;
+  }
+  function gSector(g, r0, r1, dirDeg, halfDeg, col) {
+    const a0 = (dirDeg - halfDeg) * D, a1 = (dirDeg + halfDeg) * D;
+    g.beginPath(); g.arc(0, 0, r1, a0, a1); g.arc(0, 0, r0, a1, a0, true); g.closePath(); g.fillStyle = col; g.fill();
+  }
+  // the lit segments as one sector (no seams); drawGSeg draws one segment, for a later sprite export
+  function drawGArc(g, v) { const a = G.gm.arc; gSector(g, a.r0, a.r1, (v.arcFrom + v.arcTo) / 2, (v.arcTo - v.arcFrom) / 2, P.gCyan); }
+  function drawGSeg(g, k) { const a = G.gm.arc; gSector(g, a.r0, a.r1, k * a.seg, a.seg / 2, P.gCyan); }
+  // a bar between two rings: curved ends on the rings, straight sides parallel to the axis (Spa: the white and red
+  // bars have the same height, about 15 units, although they sit at different radii)
+  function drawGBlock(g, axisDeg, layer) {
+    const b = G.gm[layer], a0 = Math.asin(b.halfH / b.r0), a1 = Math.asin(b.halfH / b.r1), t = axisDeg * D;
+    g.beginPath(); g.arc(0, 0, b.r1, t - a1, t + a1); g.arc(0, 0, b.r0, t + a0, t - a0, true); g.closePath();
+    g.fillStyle = layer === 'red' ? P.gRed : P.gWhite; g.fill();
+  }
   function drawGDial(g, st) {
-    // Spa-style G meter: four mauve rings and a three-layer wedge pointing along the G vector
-    [32.2, 27.6, 23.0, 17.8].forEach(r => { g.beginPath(); g.arc(0, 0, r, 0, 7); g.strokeStyle = P.gRing; g.lineWidth = 0.4; g.stroke(); });
-    const phi = st.gDir * D, m = st.g;
-    const layer = (r0, r1, half, col, show) => { if (!show) return; g.beginPath(); g.arc(0, 0, r1, phi - half * D, phi + half * D); g.arc(0, 0, r0, phi + half * D, phi - half * D, true); g.closePath(); g.fillStyle = col; g.fill(); };
-    layer(12.5, 15.8, 70, P.gTeal, m > 0.15);
-    layer(18.4, 23.7, 19, P.gWhite, m > 1.4);
-    layer(24.3, 30.3, 18, P.gRed, m > 2.4);
-    gText(g, m);
-    text(g, 'G-FORCE', 0, 5.2, 2.7, P.label, { tr: 0.3 });
+    drawGRings(g);
+    const v = gView(st);
+    if (!v.ok) return drawGLabel(g, true);
+    if (v.arc) {
+      drawGArc(g, v);
+      drawGBlock(g, v.axis, 'white');
+      if (v.red) drawGBlock(g, v.axis, 'red');
+    }
+    gText(g, v.g, v.digitsRed);
+    drawGLabel(g, false);
   }
 
   // ---------- left wing: turn + name lanes
@@ -461,6 +582,27 @@ const HALO = (() => {
     drawAeroLabel(g, tint ? P.aeroOn : P.white);
     drawAeroBars(g, straight, tint ? P.aeroOn : P.aeroBar);
   }
+  // DRS pill (2025 and F2 cars), in the active-aero spot. look: 'off' (grey: unavailable), 'avail' (white outline:
+  // available), 'open' (green: open); see drsLook for the game's states.
+  function drawDRS(g, look) {
+    const d = GV.drs;
+    g.save(); g.translate(d.x, d.y); frame(g, d.rot, d.lean);
+    const path = () => rr(g, -d.w / 2, -d.h / 2, d.w, d.h, d.r);
+    let txt;
+    if (look === 'open') {
+      path(); g.strokeStyle = PV.drsOpenGlow; g.lineWidth = 2.4; g.stroke();
+      path(); g.fillStyle = PV.drsOpen; g.fill(); g.strokeStyle = PV.drsOpenLine; g.lineWidth = d.line; g.stroke();
+      txt = PV.drsOpenText;
+    } else if (look === 'avail') {
+      path(); g.fillStyle = PV.drsAvailFill; g.fill(); g.strokeStyle = PV.drsAvailLine; g.lineWidth = d.line; g.stroke();
+      txt = PV.drsAvailText;
+    } else {
+      path(); g.fillStyle = PV.drsOff; g.fill(); g.strokeStyle = PV.drsOffLine; g.lineWidth = 0.5; g.stroke();
+      txt = PV.drsOffText;
+    }
+    text(g, 'DRS', 0, 0, d.fs, txt, { tr: d.tr, w: 760 });
+    g.restore();
+  }
 
   // Gear strip: a quadratic bezier (digits on it) and the RPM track offset from it by `track`
   const RPM_T0 = -0.035, RPM_T1 = 1.03;
@@ -510,8 +652,7 @@ const HALO = (() => {
   function drawCentre(g, st) {
     g.save(); centreFrame(g, st);
     g.beginPath(); g.arc(0, 0, G.disc.r, 0, 7); g.fillStyle = P.discOuter; g.fill();   // navy collar around the dial
-    if (st.mode !== 'spa') { drawCapsule(g, true, st.recharge, 'RECHARGE'); drawCapsule(g, false, st.deploy, 'DEPLOY'); }
-    else { [true, false].forEach(l => { poly(g, capsulePts(l)); g.strokeStyle = 'rgba(140,175,195,0.22)'; g.lineWidth = 0.45; g.stroke(); }); }
+    if (!gOn(st) && carClass(st).capsules) { drawCapsule(g, true, st.recharge, 'RECHARGE'); drawCapsule(g, false, st.deploy, 'DEPLOY'); }   // G variant, F2: no capsules
     drawStripes(g, true, st.brake, P.brake, P.brakeTop);
     drawStripes(g, false, st.throttle, P.throttle, P.throttleTop);
     drawCentreLabels(g);
@@ -527,7 +668,7 @@ const HALO = (() => {
     drawNames(g, st);
     drawTurn(g, st);
     drawCentre(g, st);
-    drawAero(g, st);
+    if (carClass(st).drs) drawDRS(g, drsLook(st)); else drawAero(g, st);
     drawGears(g, st);
     g.restore();
   }
@@ -536,9 +677,12 @@ const HALO = (() => {
   const internals = {
     D, FONT, CAP, text, frame, rr, poly, lerp, bez, bezTan, lanePoint, laneAngle, laneText, capsulePts, stripePanelPts,
     capsXin, capsXout, stripeXin, stripeXout, stripeLine, slatPts, slatColour, stripeY, stripePitch, drawSlat, centreFrame, drawCentreLabels, drawBand, drawWing, drawStripes, drawCapsule, drawDisc, drawBoost, drawOT, speedText,
-    mphText, battInterior, battFill, battOutline, battBolt, drawGStatic, gText, turnArrow, drawTurnArrow, drawTurnNumber,
+    mphText, battInterior, battFill, battOutline, battBolt, drawGStatic, gText, gSlots, gChar, gOn, gView, gFormat, drawGRings, drawGLabel,
+    drawGArc, drawGSeg, drawGBlock, gSector, turnArrow, drawTurnArrow, drawTurnNumber,
     drawTurnLabel, drawRails, drawAeroLabel, drawAeroBars, gearPt, drawGearTrack, drawRpmBar, drawGearMarker,
     drawGearDigit, drawGearLabels, RPM_T0, RPM_T1,
+    // car classes (the 2025 and F2 variants)
+    CLASSES, carClass, drsLook, ersModeIndex, ERS_MODES, drawDRS, drawErsCaption, drawErsMode,
   };
-  return { draw, G, P, internals, parts: { drawCentre, drawNames, drawTurn, drawAero, drawGears, drawDial, drawBand, drawWing } };
+  return { draw, G, P, GV, PV, CLASSES, internals, parts: { drawCentre, drawNames, drawTurn, drawAero, drawDRS, drawGears, drawDial, drawBand, drawWing } };
 })();

@@ -1,0 +1,38 @@
+# In-game validation report
+
+Log: `tools/ingame/testdata/synthetic.csv` — 9079 records, 330 s with the player car live, 316 s of it with the simulation advancing.
+
+| Field | Verdict | Evidence | To complete |
+|---|---|---|---|
+| Lifecycle | **PASS** | 1 car/session generations, player car found in 100% of records, max 0 rejected table slots in a frame, 0 records dropped |  |
+| Player car (ControllerSystem) | **PASS** | system readable in 100% of in-session records, exactly one local human car in 100%; agrees with the is_ai rule in 100.0% of 9079 records where both name a car; player source: ControllerSystem 100%, is_ai fallback 0%, none 0%; spectate flag set in 0 records (expect 0 while driving); no player car while the ControllerSystem named one in 0 of 9079 records | include a formation lap and a pit stop (AI handovers) |
+| Car table (identity) | **PASS** | vehicle count [23]; slot statuses over 9079 records: '.' 199738, 's' 9079; the player car's slot (vehicle named by the ControllerSystem) held a car in 100% of 9079 records; longest rejection of any slot 0.0 s; exactly one car without ERS ('s', the safety car) in 100% of records; the check used before 2026-11-09 (CarLive+0x0 read as a vtable) would have dropped the player car in 98% of 9079 live records (100% of 8962 moving) |  |
+| Speed | **PASS** | distance counter (total_m): Δdistance / ∫speed dt = 1.000 median (p5 0.989, p95 1.013) over 309 fresh 1 s windows above 20 km/h, r(Δdistance / Δt, mean speed) = 1.000; provider reference (speed_dist_kmh over its dist_win_s window): 0.999 × the mean speed over that window, median (p5 0.991, p95 1.009), r = 1.000, present in 100% of 8651 fresh moving records; max 305 km/h |  |
+| Gear | **PASS** | gears seen [0, 1, 2, 3, 4, 5, 6, 7, 8]; brazil race (generation 1), 282 s in gear: rpm per km/h 1: 110.0 (cv 0.00), 2: 88.0 (cv 0.00), 3: 72.0 (cv 0.00), 4: 61.0 (cv 0.00), 5: 53.0 (cv 0.00), 6: 46.0 (cv 0.00), 7: 40.0 (cv 0.00), 8: 34.0 (cv 0.00); left out: 187 launch records, 0 with the clutch out (rpm under 4600); 0 multi-step jumps between samples | select reverse once to cover R |
+| RPM | **PASS** | range 3366–11500 rpm, limiter 13100, idle median 4000, median drop on upshift 1441 rpm over 106 upshifts |  |
+| Throttle | **PASS** | median accel 4.1 m/s² over 633 fresh 0.3 s windows at full throttle |  |
+| Brake | **PASS** | median accel -33.1 m/s² over 50 fresh 0.3 s windows with the brake > 60% |  |
+| Longitudinal g (G-meter) | **PASS** | g_long = 1.000 × Δspeed/Δt / 9.81, r = 0.998, over 963 fresh 0.3 s windows above 30 km/h; median g_long +0.44 speeding up (> 0.2 g), -3.34 braking (< −1 g): positive = speeding up |  |
+| Lateral g (G-meter) | **PASS** | g_lat = 1.000 × the lateral acceleration from the world velocity, r = 1.000, same windows; median g_lat -1.95 steering right (steer > 0.1, 72 windows), +1.89 steering left (45): positive = toward the car's left |  |
+| Battery energy | **PASS** | 0.00–3.20 MJ (capacity 4.00 MJ) |  |
+| Recharge (harvest power) | **PASS** | over 206 fresh 1 s windows of a 2026 car in one ERS mode (None 15, Medium 152, Boost 5, Hotlap 34), store between 0.05 MJ and full − 0.05 MJ: ΔE = 0.996 × ∫harvest_k dt − 1.002 × ∫deploy dt (least squares), r(ΔE, ∫(harvest_k − deploy) dt) = 0.9996, median |ΔE − ∫(harvest_k − deploy) dt| = 1.2 kJ; 83 windows harvesting > 50 kJ; harvest_h max 0 kW |  |
+| Deploy (deploy power) | **PASS** | over 206 fresh 1 s windows of a 2026 car in one ERS mode (None 15, Medium 152, Boost 5, Hotlap 34), store between 0.05 MJ and full − 0.05 MJ: ΔE = 0.996 × ∫harvest_k dt − 1.002 × ∫deploy dt (least squares), r(ΔE, ∫(harvest_k − deploy) dt) = 0.9996, median |ΔE − ∫(harvest_k − deploy) dt| = 1.2 kJ; 132 windows deploying > 50 kJ; at full throttle 150–250 km/h by mode: Medium: deploying in 100% of 2371, p95 160 kW; Hotlap: deploying in 100% of 459, p95 240 kW; Boost: deploying in 100% of 34, p95 350 kW; None (mode 0): deploy max 0 kW, harvest max 0 kW over 422 records |  |
+| Boost (ERS mode 2) | **PASS** | modes seen [0, 1, 2, 3], 7 mode changes; 2 Boost activations (median 7.3 s, longest 7.9 s); HUD Boost lit in 4% of records, disagreeing with mode 2 in 0; median deploy at full throttle 150–250 km/h (fresh records) 350 kW in Boost, 160 kW in the other modes | check that the halo's Boost light came on with the game's own Boost indicator (the log cannot see the button) |
+| Overtake (Overtake Mode active, +0x1a62) | **NO DATA** | no moving practice/qualifying records | drive a practice lap in a 2026 car |
+| Lap distance / lap | **PASS** | brazil race (generation 1) (4309 m): laps 0–4, 4 distance wraps, 4 lap increments, 4 at the same moment; 1 crossings from behind the line (grid, pit exit, garage: no lap counted); entry → car link matched in 100% of records |  |
+| Turn number (order) | **PASS** | brazil race (generation 1): 30 passes of 7 labels, 29 of 29 changes in track order; 29 of 29 label changes in track order (wrapping at the line) | check that the number matches the corner on screen; a few out-of-order changes come from spins or the pit lane |
+| Turn position | **PASS** | brazil race (generation 1): apexes +5 m from the halo's turns (median of 7: T1 +0, T2 +5, T3 +5, T4 +5, T5 +10, T6 +5, T7 +5) |  |
+| Turn arrow (direction) | **PASS** | 7 turns judged by the direction the car turned over each turn's stretch; brazil race (generation 1) (stretches moved +5 m): T1 R -46°, T2 L +33°, T3 L +29°, T4 R -38°, T5 L +25°, T6 R -35°, T7 R -41°; the arrow changed within a pass 0 times |  |
+| Position (classification) | **PASS** | results system found in 100% of records; a full permutation 1..N in 100% of 9079 classified records; race: own position = road order in 100% of 9079 records; rival lane = one place ahead in 9079/9079 records | in practice or qualifying, check that the rival name is the car one place above you on the game's timing tower (that order is L2) |
+| HUD = state | **PASS** | 0 km/h mismatches, 0 gear mismatches, 0 Boost mismatches, 0 pedal-availability mismatches between the read state and the published leaves; throttle slats within one of the read throttle in 100%, brake slats in 100% of 9079 records |  |
+| Performance | **PASS** | 12.5 us/frame mean, 95 us p99 of the per-record worst, 95 us worst; 138 fps, so the mean is 0.17 % of a frame |  |
+
+- is_ai rule: exactly one human-driven car in 100% of in-session records; 0 records kept the held car (AI handover / loading), 0 records had no player (halo hidden).
+- Slot statuses: '.' a car with ERS, 's' a car without ERS (the safety car), 'n' null slot, 'u' unreadable, 't' not a CarLive, 'i' vehicle id not the slot index.
+- Simulation advancing in 316 s of the live log, state frozen in 14 s (game paused or car parked: world velocity, distance counter, g and ERS powers repeat bit for bit). 275 of 8943 live records above 20 km/h are frozen (paused at speed), the longest run 10 s from t = 150.1 s. Speed, pedal, g and energy checks use fresh records only and take rates only inside runs of them.
+- Stationary samples: 112 (speed < 1 km/h); speed while stationary max 0.72 km/h.
+- Throttle and brake both above 50%: 0 samples (should be near 0).
+- Reverse samples: 0; input flags seen: [0].
+- Low-battery state reached: yes (minimum 0.00 MJ).
+- Deploy at full throttle by speed (median kW, fresh records, battery > 0.2 MJ): Medium 200–220: 160, 220–240: 160, 240–260: 160, 260–280: 160; Hotlap 200–220: 240; Boost 220–240: 350, 240–260: 350, 260–280: 346, 280–300: 252.
+- Overtake Mode bytes +0x1a60..63 (eligible, armed at detection, active, earned while suspended) seen: [0.0].

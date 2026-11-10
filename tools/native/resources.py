@@ -23,6 +23,8 @@ SLOT = 'central_bg_fill'
 TEX = 'eaid://ui_package/art/osd/textures/halo/halo_{}.tif'
 MAT = 'eaid://ui_package/art/osd/materials/halo/halo_{}.material'
 EMB = 'eaid://ui_package/art/osd/components/halo/halo_{}.emb?context=default'
+SLOT_EDGE = 'central_bg_edge'
+EMB_EDGE = 'eaid://ui_package/art/osd/components/halo/edge/halo_{}.emb?context=default'
 
 
 def surface(img, cache_dir):
@@ -70,6 +72,19 @@ def sprite_resources(sprites, stock_material, cache_dir):
         res.append((eb, 'GfxMatBindRes', [emb.write([(SLOT, mat)])]))
         embs[name] = eb
     return res, embs
+
+
+class EdgeBindings(dict):
+    """The F2 dial's halo (docs/halo-car-classes.md): its quads clone the F2 scene's centred quad central_bg_edge,
+    whose mesh slot is "central_bg_edge", so they need bindings of that slot to the same sprite materials. Made on
+    demand: looking a sprite up records it; resources() then gives a binding for each sprite the scene uses."""
+
+    def __missing__(self, name):
+        self[name] = EMB_EDGE.format(name)
+        return self[name]
+
+    def resources(self):
+        return [(eb, 'GfxMatBindRes', [emb.write([(SLOT_EDGE, MAT.format(name))])]) for name, eb in self.items()]
 
 
 def load_sprites(native_out):

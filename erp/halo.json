@@ -26,6 +26,46 @@
         "2025_asset_groups/ui_package/screens/hud_spectator_2.erp"
       ],
       "source": "erp/halo_spectator.erp"
+    },
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp",
+        "2025_asset_groups/ui_package/persistent.erp"
+      ],
+      "source": "erp/tower_scene.erp"
+    },
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp"
+      ],
+      "source": "erp/tower_template.erp"
+    },
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/flow_replay.erp",
+        "2025_asset_groups/ui_package/screens/replays_and_highlights.erp"
+      ],
+      "source": "erp/tower_replay.erp"
+    },
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/flow_frontend.erp"
+      ],
+      "source": "erp/tower_replay_scene.erp"
+    },
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/screens/hud_spectator_2.erp"
+      ],
+      "source": "erp/tower_spectator.erp"
     }
   ]
 }

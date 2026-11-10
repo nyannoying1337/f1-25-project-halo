@@ -23,7 +23,8 @@ struct F1_25Symbols {
     uintptr_t controllers = 0;    // qword global holding the ControllerSystem (0x146096578)
     uintptr_t vt_controllers = 0; // vt_Sess_ControllerSystem (0x1458824a0)
     uintptr_t vt_human = 0;       // vt_Sess_HumanController (0x145882170)
-    uintptr_t spectate_key = 0;   // the spectate component's registry key (0x146080ca8); logged only
+    uintptr_t spectate_key = 0;   // the spectator director's registry key (0x146080ca8): while the spectator HUD is
+                                  // up the halo follows the watched car (docs/spectator-ui.md §2); optional
     // vt_Car_SystemsContainer (0x145c040c8): the vptr of the component container embedded at CarLive+0x380, the
     // car's type identity (CarLive itself has no vtable). Required.
     uintptr_t vt_car_systems = 0;
@@ -50,7 +51,11 @@ struct F1_25Raw {
     float vel[3]{};            // m/s, world
     float steer_angle = 0, steer_lock = 0; // rad
     uint8_t ers_flags[4]{};    // CarErs+0x1a60..+0x1a63 (meaning unconfirmed)
-    float speed_from_distance = 0; // m/s, d(total distance)/dt over the last sample, 0 when unknown
+    // m/s along the track: the progress total's change over >= 0.5 s, measured between two of its changes (it
+    // changes once per 60 Hz simulation step). 0 with distance_window 0 when unknown (stopped, paused, < 0.5 s
+    // since a restart).
+    float speed_from_distance = 0;
+    float distance_window = 0; // s, the window speed_from_distance spans; 0 = no reference
     uint32_t rejects = 0;      // cars rejected by validation in this frame's scan (+1: the player's car failed
                                // re-validation after the reads)
     uint8_t humans = 0;        // cars read as human-driven (is_ai == 0) this frame

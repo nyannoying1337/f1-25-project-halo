@@ -2,6 +2,7 @@
 
 usage: python -I scene_dump.py <built dial_om_xm.idf> <info.json> <out.json>
        python -I scene_dump.py <built dial_complete.idf> <preview.json> <out.json> halo_pv   (the HUD editor preview)
+       python -I scene_dump.py <built dial_complete.idf> <info_2025.json> <out.json> h25     (2025 cars; F2: hf2)
 """
 import json
 import math
@@ -24,11 +25,17 @@ def node(e):
     t = e.type
     d = {'name': e.name, 'type': t, 'pos': list(o['position'].value[:3]), 'scale': list(o['scale'].value[:3]),
          'rot': list(o['rotation'].value), 'kids': [node(c) for c in e.children]}
+    if get_param(o, 'isHidden') is True:   # hidden in the scene: only a template's bound visible shows it
+        d['hidden'] = True
     if t == 'eNull' and e.geoms:
         mat = e.geoms[0]['materialid']
         d['type'] = 'quad'
         d['sprite'] = mat.rsplit('/halo_', 1)[1].split('.emb')[0] if '/halo_' in mat else None
-        d['w'], d['h'] = 4.48 * d['scale'][0], 1.92 * d['scale'][2]
+        # the cloned quad's mesh size (its extents, x and z: the quad is turned): 4.48 x 1.92 in dial_om_xm and
+        # dial_complete, 3.4 x 1.68 for the F2 dial's edge quad
+        lo, hi = get_param(o, 'minExtents'), get_param(o, 'maxExtents')
+        d['mw'], d['mh'] = (hi[0] - lo[0], hi[2] - lo[2]) if lo and hi else (4.48, 1.92)
+        d['w'], d['h'] = d['mw'] * d['scale'][0], d['mh'] * d['scale'][2]
         d['layer'] = get_param(o, 'eLayer.layer')
     elif t == 'eNull':
         d['zrot'] = zangle(d['rot'])

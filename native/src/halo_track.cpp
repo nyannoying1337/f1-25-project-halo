@@ -30,6 +30,7 @@ constexpr float kBehind = 15.f;       // ... until this far after it
 #endif
 constexpr float kCurv = kBin / HALO_CURV_R; // heading change per bin at that radius
 constexpr int kVotesKnown = 30;
+constexpr float kMaxCurvature = 0.2f;       // 1/m: a 5 m radius; tighter is a spin, not the track
 
 float wrap_pi(float a)
 {
@@ -126,6 +127,7 @@ void Corners::reset(const char *name, float length_m)
         nb_ = int(std::ceil(length_ / kBin));
         sx_.assign(nb_, 0);
         sz_.assign(nb_, 0);
+        sk_.assign(nb_, 0);
         n_.assign(nb_, 0);
     }
     if (official_ >= 0) {
@@ -147,13 +149,36 @@ void Corners::reset(const char *name, float length_m)
 
 void Corners::feed(float d, float x, float z)
 {
-    if (nb_ <= 0 || !std::isfinite(d) || !std::isfinite(x) || !std::isfinite(z))
+    if (nb_ <= 0 || absolute_ || !std::isfinite(d) || !std::isfinite(x) || !std::isfinite(z))
         return;
     int b = std::min(nb_ - 1, int(wrap_len(d, length_) / kBin));
     if (n_[b] >= 4000)
         return;
     sx_[b] += x;
     sz_[b] += z;
+    count(b);
+}
+
+void Corners::feed_curvature(float d, float k)
+{
+    if (nb_ <= 0 || !std::isfinite(d) || !std::isfinite(k) || std::fabs(k) > kMaxCurvature)
+        return;
+    if (!absolute_) {
+        if (covered_)
+            return; // this track learns from positions
+        absolute_ = true;
+    }
+    int b = std::min(nb_ - 1, int(wrap_len(d, length_) / kBin));
+    if (n_[b] >= 4000)
+        return;
+    sk_[b] += k;
+    count(b);
+}
+
+void Corners::count(int b)
+{
+    covered_ += n_[b] == 0;
+    solid_ += n_[b] == 3;
     ++n_[b];
 }
 
@@ -162,10 +187,12 @@ void Corners::vote(float cross, float steer)
     votes_ = std::clamp(votes_ + (cross > 0 ? 1.f : -1.f) * (steer < 0 ? 1.f : -1.f), -400.f, 400.f);
 }
 
-bool Corners::handedness_known() const { return std::fabs(votes_) >= kVotesKnown || table_hand_; }
+bool Corners::handedness_known() const { return absolute_ || std::fabs(votes_) >= kVotesKnown || table_hand_; }
 
 int Corners::handedness() const
 {
+    if (absolute_)
+        return 1; // curvature: + is left
     if (std::fabs(votes_) >= kVotesKnown)
         return votes_ > 0 ? 1 : -1;
     return table_hand_ ? table_hand_ : 1;
@@ -175,18 +202,13 @@ void Corners::update(double now)
 {
     if (nb_ <= 0 || built_ >= 2)
         return;
-    int covered = 0, solid = 0;
-    for (uint32_t c : n_) {
-        covered += c > 0;
-        solid += c >= 4;
-    }
-    if (covered && first_ < 0)
+    if (covered_ && first_ < 0)
         first_ = now;
-    float cov = float(covered) / nb_;
+    float cov = float(covered_) / nb_;
     if (built_ == 0 && (cov >= 0.97f || (cov >= 0.9f && now - first_ > 120))) {
         build();
         built_ = 1;
-    } else if (built_ == 1 && solid >= 0.95f * nb_) {
+    } else if (built_ == 1 && solid_ >= 0.95f * nb_) {
         build();
         built_ = 2;
     }
@@ -199,8 +221,8 @@ void Corners::build()
     std::vector<int> known;
     for (int i = 0; i < N; ++i)
         if (n_[i]) {
-            x[i] = float(sx_[i] / n_[i]);
-            z[i] = float(sz_[i] / n_[i]);
+            x[i] = float((absolute_ ? sk_[i] : sx_[i]) / n_[i]); // curvature: the bin's mean, in x
+            z[i] = absolute_ ? 0.f : float(sz_[i] / n_[i]);
             known.push_back(i);
         }
     if (known.size() < 8)
@@ -226,18 +248,24 @@ void Corners::build()
         }
         v.swap(o);
     };
-    for (int pass = 0; pass < 2; ++pass) {
-        smooth(x, 3);
-        smooth(z, 3);
-    }
-    std::vector<float> h(N);
-    for (int i = 0; i < N; ++i) {
-        int p = (i - 1 + N) % N, q = (i + 1) % N;
-        h[i] = std::atan2(z[q] - z[p], x[q] - x[p]);
-    }
     dth_.assign(N, 0);
-    for (int i = 0; i < N; ++i)
-        dth_[i] = wrap_pi(h[(i + 1) % N] - h[i]);
+    if (absolute_) {
+        // the heading change from one bin centre to the next (at the end of each bin, like the position line's)
+        for (int i = 0; i < N; ++i)
+            dth_[i] = 0.5f * (x[i] + x[(i + 1) % N]) * kBin;
+    } else {
+        for (int pass = 0; pass < 2; ++pass) {
+            smooth(x, 3);
+            smooth(z, 3);
+        }
+        std::vector<float> h(N);
+        for (int i = 0; i < N; ++i) {
+            int p = (i - 1 + N) % N, q = (i + 1) % N;
+            h[i] = std::atan2(z[q] - z[p], x[q] - x[p]);
+        }
+        for (int i = 0; i < N; ++i)
+            dth_[i] = wrap_pi(h[(i + 1) % N] - h[i]);
+    }
     smooth(dth_, 2);
 
     if (official_ >= 0 && official_ok_) {
@@ -258,36 +286,11 @@ float Corners::turn_between(float a, float b) const
     return s;
 }
 
-// The official list fits this track if most turn directions agree with the learned line (under one
-// handedness, or the measured one). Then the whole list shifts by the median distance from each turn to
-// the strongest apex of its direction within 60 m, when that is 12 m or more: it absorbs a timing line
-// that sits apart from the game's, without moving single turns onto a neighbour's apex.
-bool Corners::validate_official()
+// Median distance from each listed turn to the strongest bend of its direction within 60 m (hand: +1 when a
+// heading increase is a left turn); 0 when fewer than 5 turns find one.
+float Corners::apex_offset(int hand) const
 {
-    const TrackCorners &T = kTracks[official_];
-    for (int i = 0; i < T.count && i < int(turns_.size()); ++i)
-        turns_[i].pos = T.corners[i].frac * length_;
-    int counted = 0, match_a = 0; // a: heading increase = left
-    for (const Turn &t : turns_) {
-        float turn = turn_between(t.pos - 25, t.pos + 25);
-        if (std::fabs(turn) < 6 * kDeg)
-            turn = turn_between(t.pos - 60, t.pos + 60);
-        if (std::fabs(turn) < 3 * kDeg)
-            continue;
-        ++counted;
-        match_a += (turn > 0) == t.left;
-    }
-    if (counted < 4)
-        return true; // nothing to judge by: keep the list
-    float ra = float(match_a) / counted, rb = 1 - ra;
-    int voted = std::fabs(votes_) >= kVotesKnown ? (votes_ > 0 ? 1 : -1) : 0;
-    float r = voted > 0 ? ra : voted < 0 ? rb : std::max(ra, rb);
-    if (r < 0.7f)
-        return false;
-    if (!voted && std::max(ra, rb) >= 0.85f)
-        table_hand_ = ra >= rb ? 1 : -1;
-
-    const int hand = voted ? voted : (ra >= rb ? 1 : -1), reach = int(60 / kBin);
+    const int reach = int(60 / kBin);
     std::vector<float> deltas;
     for (const Turn &t : turns_) {
         float want = t.left ? float(hand) : float(-hand), best_v = kCurv;
@@ -304,13 +307,53 @@ bool Corners::validate_official()
         if (found)
             deltas.push_back(best * kBin);
     }
-    if (deltas.size() >= 5) {
-        std::nth_element(deltas.begin(), deltas.begin() + deltas.size() / 2, deltas.end());
-        float shift = deltas[deltas.size() / 2];
-        if (std::fabs(shift) >= 12)
-            for (Turn &t : turns_)
-                t.pos = wrap_len(t.pos + shift, length_);
-        shift_ = std::fabs(shift) >= 12 ? shift : 0;
+    if (deltas.size() < 5)
+        return 0;
+    std::nth_element(deltas.begin(), deltas.begin() + deltas.size() / 2, deltas.end());
+    return deltas[deltas.size() / 2];
+}
+
+// The official list fits this track if most turn directions agree with the learned line (under one
+// handedness, or the measured one). Then the whole list shifts by the median distance from each turn to
+// the strongest apex of its direction within 60 m, when that is 12 m or more: it absorbs a timing line
+// that sits apart from the game's, without moving single turns onto a neighbour's apex. Bends learned from
+// curvature know left from right, so there the shift comes first and the directions are judged where the
+// turns really are (at Bahrain, 33 m on: a +-25 m window around a listed turn would sit on the exit of the
+// turn before).
+bool Corners::validate_official()
+{
+    const TrackCorners &T = kTracks[official_];
+    for (int i = 0; i < T.count && i < int(turns_.size()); ++i)
+        turns_[i].pos = T.corners[i].frac * length_;
+    const float pre = absolute_ ? apex_offset(1) : 0.f;
+    int counted = 0, match_a = 0; // a: heading increase = left
+    for (const Turn &t : turns_) {
+        const float p = t.pos + pre;
+        float turn = turn_between(p - 25, p + 25);
+        if (std::fabs(turn) < 6 * kDeg)
+            turn = turn_between(p - 60, p + 60);
+        if (std::fabs(turn) < 3 * kDeg)
+            continue;
+        ++counted;
+        match_a += (turn > 0) == t.left;
+    }
+    shift_ = 0;
+    if (counted < 4)
+        return true; // nothing to judge by: keep the list
+    float ra = float(match_a) / counted, rb = 1 - ra;
+    int voted = absolute_ ? 1 : std::fabs(votes_) >= kVotesKnown ? (votes_ > 0 ? 1 : -1) : 0;
+    float r = voted > 0 ? ra : voted < 0 ? rb : std::max(ra, rb);
+    if (r < 0.7f)
+        return false;
+    if (!voted && std::max(ra, rb) >= 0.85f)
+        table_hand_ = ra >= rb ? 1 : -1;
+
+    const int hand = voted ? voted : (ra >= rb ? 1 : -1);
+    const float shift = absolute_ ? pre : apex_offset(hand);
+    if (std::fabs(shift) >= 12) {
+        for (Turn &t : turns_)
+            t.pos = wrap_len(t.pos + shift, length_);
+        shift_ = shift;
     }
     return true;
 }

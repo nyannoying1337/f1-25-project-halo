@@ -3,6 +3,7 @@
 // decoding, validation, lifecycle handling (freed and recycled objects, AI takeover, session changes) and
 // that nothing faults. Build and run: tests/run_tests.sh
 #include "../src/game_state_f1_25.hpp"
+#include "../src/halo_corners.hpp"
 #include "../src/hud_model.hpp"
 #include "../src/leaves.hpp"
 
@@ -397,13 +398,94 @@ static void test_progress()
     p.sample(1.1, s);
     APPROX(s.progress.lap_m, 1.0, 0.01);
     APPROX(s.progress.total_m, 4310.0, 0.01);
-    APPROX(p.raw().speed_from_distance, 100.0, 0.5); // 10 m in 0.1 s, across the line
+    // one change 0.1 s after the first: no distance reference yet (it needs >= 0.5 s, test_distance_reference)
+    CHECK(p.raw().distance_window == 0 && p.raw().speed_from_distance == 0);
     // an entry linked to another car is logged; the link is not required until a drive confirms it
     uintptr_t veh = 0;
     std::memcpy(&veh, g.entries[1] + 0x28, sizeof veh);
     put<uintptr_t>(reinterpret_cast<uint8_t *>(veh), 0x58, uintptr_t(lead.car));
     p.sample(1.2, s);
     CHECK(!p.raw().progress_link && s.progress.ok);
+}
+
+// only the total, as the game's simulation step writes it (set_progress also rebuilds the entry)
+static void set_total(FakeGame &g, uint8_t id, float total)
+{
+    uint32_t bits;
+    std::memcpy(&bits, &total, 4);
+    put<uint32_t>(g.entries[id], 0x98, bits ^ 0x13572468u);
+}
+
+// The progress total changes once per 60 Hz simulation step while the provider samples every rendered frame
+// (~170 fps). Runs 4-6 logged the frame-to-frame difference: 0 on most frames, ~3x the speed on the rest.
+static void test_distance_reference()
+{
+    FakeGame g;
+    make_world(g, 2);
+    FakeCar lead = make_car(0, 1), me = make_car(1, 0);
+    for (FakeCar *c : {&lead, &me}) {
+        set_drive(*c, 80.f, 0.f, 7, 1100.f, 1.f, 0.f, 0);
+        set_ers(*c, 3e6f, 0.f, 0.f, 1);
+    }
+    g.table[0] = uintptr_t(lead.car);
+    g.table[1] = uintptr_t(me.car);
+    g.count = 2;
+    set_progress(g, 0, 3000.f, 0);
+    set_progress(g, 1, 1000.f, 0);
+    gs::F1_25Provider p(symbols(g), true);
+    gs::GameState s;
+    double t = 10.0, next_step = 10.0;
+    float total = 1000.f, speed = 80.f;
+    bool steps_on = true;
+    int k = 0, bad = 0;
+    // frames 1/170 s +-30 %; the simulation steps (when on) at 60 Hz, each seen by the first frame after it
+    auto run = [&](double seconds, int &with_ref, float &worst, float &peak) {
+        with_ref = 0;
+        worst = peak = 0;
+        const double end = t + seconds;
+        while (t < end) {
+            t += (1.0 / 170) * (1.0 + 0.3 * double((k++ * 7919) % 11 - 5) / 5.0);
+            for (; next_step <= t; next_step += 1.0 / 60)
+                if (steps_on)
+                    total += speed / 60.f;
+            set_total(g, 1, total);
+            p.sample(t, s);
+            const gs::F1_25Raw &r = p.raw();
+            peak = std::max(peak, std::fabs(r.speed_from_distance));
+            if (r.distance_window > 0) {
+                ++with_ref;
+                worst = std::max(worst, std::fabs(r.speed_from_distance - speed));
+                bad += !(r.distance_window >= 0.5f && r.distance_window < 0.56f);
+            } else {
+                bad += r.speed_from_distance != 0; // no window, no value
+            }
+        }
+    };
+    int n = 0;
+    float worst = 0, peak = 0;
+    run(0.45, n, worst, peak);
+    CHECK(n == 0); // < 0.5 s of changes
+    run(1.5, n, worst, peak);
+    CHECK(n > 230); // every frame from 0.5 s on
+    CHECK(worst < 0.025f * speed); // both ends are changes: at most one frame of timing error per end
+    // paused (the total holds while frames go on): the reference goes away after 0.25 s ...
+    steps_on = false;
+    run(0.3, n, worst, peak);
+    CHECK(n < 50 && p.raw().distance_window == 0);
+    // ... and comes back 0.5 s after the steps resume, without the pause in it
+    steps_on = true;
+    speed = 50.f;
+    run(0.45, n, worst, peak);
+    CHECK(n == 0);
+    run(1.0, n, worst, peak);
+    CHECK(n > 140 && worst < 0.025f * speed);
+    // a jump (car reset to the track, flashback) restarts the window instead of reading as speed
+    total += 600.f;
+    run(0.45, n, worst, peak);
+    CHECK(n == 0 && peak < 0.025f * speed + speed);
+    run(1.0, n, worst, peak);
+    CHECK(n > 140 && worst < 0.025f * speed);
+    CHECK(bad == 0);
 }
 
 static void test_player()
@@ -700,7 +782,75 @@ static void test_classification()
     CHECK(!s.field.classified && rival() == -1);
 }
 
-// A test drive (2026-11-09, Bahrain practice, vehicle 13): 23 table slots, 22 cars in their garages and a safety car that
+// F2 (2026-11-10 00:07 and 01:36 logs): no car has ERS, the safety car neither; it sits at the vehicle id after the
+// field's and the results hold one entry per competitor. The halo showed no rival names (classified 0, rival -1)
+// while every car without ERS was skipped. Competitors count by the results' entry count.
+static void test_classification_no_ers()
+{
+    FakeGame g;
+    make_world(g, 5);
+    FakeCar c0 = make_car(0, 1, false), c1 = make_car(1, 1, false), me = make_car(2, 0, false),
+            c3 = make_car(3, 1, false), sc = make_car(4, 1, false);
+    FakeCar *all[] = {&c0, &c1, &me, &c3, &sc};
+    for (int i = 0; i < 5; ++i) {
+        set_drive(*all[i], 30.f, 40.f, 6, 1100.f, 0.75f, 0.f, 0);
+        g.table[i] = uintptr_t(all[i]->car);
+        set_progress(g, uint8_t(i), 9000.f - 1000.f * float(i), 2); // road order 0, 1, 2, 3
+    }
+    set_progress(g, 4, 9500.f, 2); // the safety car ahead of every car on the road
+    g.count = 5;
+    g.session_type = 2;
+    FakeResults r = make_results(g, 200, 137, 4); // vids 0..3: not the safety car
+    set_pos(r, 0, 3);
+    set_pos(r, 1, 1);
+    set_pos(r, 2, 2);
+    set_pos(r, 3, 4);
+    gs::F1_25Symbols sym = symbols(g);
+    sym.results_key = uintptr_t(results_key_static);
+    gs::F1_25Provider p(sym, true);
+    gs::GameState s;
+    HudModel m;
+    auto rival = [&]() {
+        m.update(s, 0.016, HudConfig{});
+        return m.view().rival_id;
+    };
+    auto has = [&](uint8_t vid) {
+        for (int i = 0; i < s.field.n; ++i)
+            if (s.field.id[i] == vid)
+                return true;
+        return false;
+    };
+
+    // practice: classified like the F1 field; the safety car has no position
+    p.sample(1.0, s);
+    CHECK(s.vehicle.ok && s.vehicle.id == 2);
+    CHECK(p.raw().results_found && s.field.classified);
+    CHECK(s.field.pos[0] == 3 && s.field.pos[1] == 1 && s.field.pos[2] == 2 && s.field.pos[3] == 4 && s.field.pos[4] == 0);
+    CHECK(rival() == 1);
+
+    // the road order holds the four competitors, not the safety car ahead of them
+    CHECK(s.field.ok && s.field.n == 4 && s.field.id[0] == 0 && s.field.player_rank == 2 && !has(4));
+
+    // race: the classification names the car ahead (car 1 P1, the player P2)
+    g.session_type = 15;
+    p.sample(1.1, s);
+    CHECK(s.session.race() && s.field.classified && rival() == 1);
+
+    // race without the classification's position for the player: the car ahead on the road (car 1), never the
+    // safety car
+    set_pos(r, 2, 40);
+    p.sample(1.2, s);
+    CHECK(!s.field.classified && s.field.ok && s.field.n == 4 && !has(4) && rival() == 1);
+    set_pos(r, 2, 2);
+
+    // without the results system (another build's symbols) there is no competitor count: cars without ERS are
+    // not counted, since one of them is the safety car. No road order, no rival.
+    gs::F1_25Provider nokey(symbols(g), true);
+    nokey.sample(2.0, s);
+    CHECK(s.vehicle.ok && !s.field.classified && s.field.n == 0 && !s.field.ok && rival() == -1);
+}
+
+// An in-game log (2026-11-09, Bahrain practice, vehicle 13): 23 table slots, 22 cars in their garages and a safety car that
 // was never placed. The pit-box actor's placement leaves an 8-aligned tag at CarLive+0x0, the pit lane's an
 // unaligned one: the provider used to read +0x0 as a vtable and lost every car from its pit exit on (cars 22 -> 21
 // -> 19, ControllerSystem still naming car 13, the halo blank). The car must stay the player's through the garage,
@@ -708,7 +858,7 @@ static void test_classification()
 static void test_pit_exit()
 {
     FakeGame g;
-    g.track_length = 5409.f; // the game's Bahrain length in that drive
+    g.track_length = 5409.f; // the game's Bahrain length in a practice log
     g.session_type = 2;      // practice
     make_world(g, 23, "bahrain");
     std::vector<FakeCar> c;
@@ -745,8 +895,8 @@ static void test_pit_exit()
     CHECK(s.field.classified && s.field.pos[13] == 14 && s.field.pos[22] == 0 && s.field.n == 22);
     const uint32_t gen = s.session.generation;
 
-    // the pit lane releases the car (unaligned tag at +0x0), the human drives off with Boost pressed, 116 m before
-    // Bahrain's turn 1 (a right-hander at 0.1323 of the lap)
+    // the pit lane releases the car (unaligned tag at +0x0), the human drives off with Boost pressed, 114 m before
+    // Bahrain's turn 1 (a right-hander at 0.1320 of the lap)
     put<uintptr_t>(c[13].car, 0, uintptr_t(kTagSpline));
     put<uint32_t>(c[13].car, 0x124, 0);
     set_drive(c[13], 0.f, 22.f, 3, 900.f, 0.8f, 0.f, 0x00);
@@ -770,13 +920,13 @@ static void test_pit_exit()
         CHECK(v.rival_id == 12); // P14 sees P13
     }
 
-    // two AI cars leave their garages too (in that drive: 21 -> 19 cars): nothing changes
+    // two AI cars leave their garages too (an in-game log: 21 -> 19 cars): nothing changes
     put<uintptr_t>(c[4].car, 0, uintptr_t(kTagSpline));
     put<uintptr_t>(c[9].car, 0, uintptr_t(kTagProxy) + 3);
     p.sample(68.4, s);
     CHECK(s.session.cars == 23 && p.raw().rejects == 0 && s.session.generation == gen && s.vehicle.ok);
 
-    // on to turn 2 (a left-hander 51 m ahead): the arrow flips; Boost released (mode back to Medium)
+    // on to turn 2 (a left-hander 49 m ahead): the arrow flips; Boost released (mode back to Medium)
     set_progress(g, 13, 5409.f + 760.f, 1);
     set_ers(c[13], 3.8e6f, 0.f, 120e3f, 1);
     p.sample(68.5, s);
@@ -868,10 +1018,389 @@ static void test_tracks()
     CHECK(Corners::official_for("abu_dhabi", 5281.f) >= 0);
 }
 
+// A Bahrain whose corners sit `offset` m after the official list (the game's lap distance starts apart from the
+// official timing line: 33 m in the in-game logs): every listed turn a 50 m bend of its direction, 1/60 m at the apex.
+static const TrackCorners &bahrain()
+{
+    for (const TrackCorners &t : kTracks)
+        if (t.track == 3)
+            return t;
+    return kTracks[0];
+}
+
+static float bahrain_curvature(float d, float offset, bool mirror = false)
+{
+    const TrackCorners &T = bahrain();
+    const float len = 5409.f;
+    float k = 0;
+    for (int i = 0; i < T.count; ++i) {
+        const float x = std::fabs(std::remainder(d - (T.corners[i].frac * len + offset), len));
+        if (x < 25.f)
+            k += (T.corners[i].left != mirror ? 1.f : -1.f) / 60.f * (1.f - x / 25.f);
+    }
+    return k;
+}
+
+// One curvature sample every 1.5 m (90 m/s at 60 Hz) from `from` to `to` metres of driving.
+static void drive(Corners &c, float from, float to, float offset, double &now, bool mirror = false)
+{
+    for (float d = from; d < to; d += 1.5f) {
+        const float at = std::fmod(d, 5409.f);
+        c.feed_curvature(at, bahrain_curvature(at, offset, mirror));
+        c.update(now += 1 / 60.0);
+    }
+}
+
+// The turn list learns where the game's corners are from the player's path curvature, and moves there.
+static void test_learned_turns()
+{
+    const float len = 5409.f, offset = 33.f;
+    const TrackCorners &T = bahrain();
+    const float t1 = T.corners[0].frac * len, t5 = T.corners[4].frac * len;
+    char label[8] = {};
+    bool right = false;
+    double now = 0;
+
+    Corners c;
+    c.reset("bahrain", len);
+    CHECK(std::string(c.source()) == "official" && c.shift() == 0 && !c.handedness_known());
+    // half a lap: nothing learned yet, the list as published (turn 2 from turn 1's listed apex on)
+    drive(c, 0, 0.5f * len, offset, now);
+    c.feed_curvature(t1, 0.5f); // a spin (tighter than a 5 m radius) teaches nothing
+    CHECK(c.shift() == 0 && c.handedness() == 1 && c.handedness_known());
+    CHECK(c.current(t1 + 2, label, sizeof label, &right) && std::string(label) == "2" && !right);
+    // the lap covered: the whole list moves to the game's corners
+    drive(c, 0.5f * len, 2.5f * len, offset, now);
+    CHECK(std::string(c.source()) == "official");
+    APPROX(c.shift(), offset, 5.0);
+    CHECK(c.current(t1 + offset - 8, label, sizeof label, &right) && std::string(label) == "1" && right);
+    CHECK(c.current(t1 + offset + 8, label, sizeof label, &right) && std::string(label) == "2" && !right);
+    // turn 5, a left-hander (the table said right until 2026-11-09; the in-game logs turn left there)
+    CHECK(c.current(t5 + offset - 50, label, sizeof label, &right) && std::string(label) == "5" && !right);
+
+    // corners where the list says: nothing moves (under 12 m)
+    Corners e;
+    e.reset("bahrain", len);
+    drive(e, 0, 2.5f * len, 0.f, now);
+    CHECK(std::string(e.source()) == "official" && e.shift() == 0);
+
+    // every bend the other way: the list does not fit, the turns come from the bends themselves
+    Corners m;
+    m.reset("bahrain", len);
+    drive(m, 0, 2.5f * len, offset, now, true);
+    CHECK(std::string(m.source()) == "learned" && m.shift() == 0);
+
+    // a track that learns from positions ignores curvature (tools/mock feeds positions)
+    Corners p;
+    p.reset("bahrain", len);
+    p.feed(10.f, 1.f, 2.f);
+    p.feed_curvature(20.f, 0.01f);
+    CHECK(!p.handedness_known());
+
+    // the model feeds the list from the game state: frames that move the lap distance on, at speed, driven by
+    // the player. A pause (the same lap distance, frame after frame) and the AI's drive teach nothing.
+    gs::GameState s{};
+    s.compatible = true;
+    s.session.active = true;
+    s.session.generation = 1;
+    s.session.track_ok = true;
+    s.session.track_length_m = len;
+    s.session.track_name_ok = true;
+    std::strcpy(s.session.track_name, "bahrain");
+    s.vehicle.ok = s.vehicle.speed_ok = s.vehicle.accel_ok = true;
+    s.vehicle.speed_mps = 60.f;
+    s.progress.ok = true;
+    auto lap = [&](HudModel &hm, float from, float to, bool ai) {
+        s.vehicle.ai_driving = ai;
+        for (float d = from; d < to; d += 1.f) {
+            s.progress.lap_m = std::fmod(d, len);
+            s.vehicle.g_lat = bahrain_curvature(s.progress.lap_m, offset) * 60.f * 60.f / 9.80665f;
+            hm.update(s, 1 / 60.0, HudConfig{});
+        }
+    };
+    HudModel hm;
+    lap(hm, 0, 1000, false);
+    s.vehicle.g_lat = -4.f; // paused in a corner: the frozen lateral g is not fed again and again
+    for (int i = 0; i < 20000; ++i)
+        hm.update(s, 1 / 60.0, HudConfig{});
+    lap(hm, 1000, 2.5f * len, false);
+    APPROX(hm.turn_shift(), offset, 5.0);
+    s.progress.lap_m = t1 + offset + 8;
+    hm.update(s, 1 / 60.0, HudConfig{});
+    CHECK(hm.view().turn == "2" && !hm.view().turn_right);
+    HudModel ai;
+    lap(ai, 0, 2.5f * len, true);
+    CHECK(ai.turn_shift() == 0);
+    // a car the spectator HUD watches never teaches the list, even one a human drives (online): only the player's
+    HudModel watched;
+    s.vehicle.player = false;
+    lap(watched, 0, 2.5f * len, false);
+    CHECK(watched.turn_shift() == 0);
+    s.vehicle.player = true;
+}
+
+// The spectator HUD (docs/spectator-ui.md §2; in game 2026-11-10 04:27, kizi.spectator-hud F8: the director followed
+// all 22 cars). While the game's spectator HUD is up (the director in the registry, +0xd0 and +0xd1 set, +0xd6 a car
+// of the table) the halo follows the watched car: every value, the progress, the rank and the rival are that car's;
+// a value the game does not give for it is not shown (never the player's instead). The car set's generation (the
+// tower's) stays over a switch; the subject generation bumps. Otherwise the player's car, as before.
+static uintptr_t spectate_key_static[1]; // the key is the address of a static, like the game's
+
+static uint8_t *add_director(FakeResults &r, int slot)
+{
+    uint8_t *d = alloc(0x100);
+    put<uintptr_t>(r.slots, size_t(slot) * 16, uintptr_t(spectate_key_static));
+    put<uintptr_t>(r.slots, size_t(slot) * 16 + 8, uintptr_t(d));
+    r.info[slot] = 0x81;
+    return d;
+}
+
+static void set_director(uint8_t *d, uint8_t ui, uint8_t active, uint8_t vid, uint32_t gap)
+{
+    put<uint8_t>(d, 0xd0, ui);
+    put<uint8_t>(d, 0xd1, active);
+    put<uint8_t>(d, 0xd6, vid);
+    put<uint32_t>(d, 0xe4, gap);
+}
+
+static void test_spectate()
+{
+    FakeGame g;
+    make_world(g, 5);
+    // cars 0..3 competitors (the player drives car 2), car 4 the safety car (no ERS); each car its own values
+    FakeCar c[5] = {make_car(0, 1), make_car(1, 1), make_car(2, 0), make_car(3, 1), make_car(4, 1, false)};
+    for (int i = 0; i < 5; ++i) {
+        set_drive(c[i], 0.f, 10.f * float(i + 1), uint32_t(i + 2), 500.f + 100.f * float(i), 0.1f * float(i + 1), 0.f, 0);
+        if (i < 4)
+            set_ers(c[i], 1e6f * float(i + 1), 0.f, 10e3f * float(i + 1), 1);
+        g.table[i] = uintptr_t(c[i].car);
+        set_progress(g, uint8_t(i), 9000.f - 1000.f * float(i), 2); // road order 0, 1, 2, 3
+    }
+    set_progress(g, 4, 9500.f, 2);
+    g.count = 5;
+    g.session_type = 15;
+    FakeResults r = make_results(g, 200, 137, 4);
+    for (int i = 0; i < 4; ++i)
+        set_pos(r, uint8_t(i), uint32_t(i + 1)); // classified as on the road
+    FakeControllers f;
+    make_controllers(f, 5, 2);
+    gs::F1_25Symbols sym = with_controllers(symbols(g), f);
+    sym.results_key = uintptr_t(results_key_static);
+    sym.spectate_key = uintptr_t(spectate_key_static);
+    gs::F1_25Provider p(sym, true);
+    gs::GameState s;
+    HudModel m;
+    HudConfig cfg;
+    cfg.g_meter = true;
+    auto upd = [&]() -> const View & {
+        m.update(s, 1 / 60.0, cfg);
+        return m.view();
+    };
+    auto player_values = [&]() {
+        return s.vehicle.ok && s.vehicle.id == 2 && s.vehicle.player && std::fabs(s.vehicle.speed_mps - 30.f) < 1e-3f;
+    };
+
+    // no director in the registry: the player's car, as before
+    p.sample(1.0, s);
+    CHECK(player_values() && s.vehicle.player_id == 2);
+    CHECK(!s.spectate.found && !s.spectate.read && !s.spectate.on && p.raw().spect_vid == -1);
+    const uint32_t gen = s.session.generation, sub0 = s.session.subject;
+    CHECK(upd().rival_id == 1 && m.view().gmeter.on);
+
+    // the director appears and spectates car 1, but the spectator HUD is not up (+0xd0 0: the safety-car cinematic,
+    // the winner sequence): still the player's car; spect_vid logs the director's car as before
+    uint8_t *d = add_director(r, 150);
+    set_director(d, 0, 1, 1, 1);
+    p.sample(2.1, s); // over 1 s since the last registry search
+    CHECK(s.spectate.found && s.spectate.read && s.spectate.ui == 0 && s.spectate.active == 1 && s.spectate.vehicle == 1);
+    CHECK(!s.spectate.on && p.raw().spect_vid == 1 && player_values());
+    CHECK(s.session.subject == sub0 && s.session.generation == gen);
+
+    // the spectator HUD up, watching car 1: every value is car 1's; the car set's generation stays, the subject bumps
+    set_director(d, 1, 1, 1, 2);
+    p.sample(2.2, s);
+    CHECK(s.spectate.on && s.spectate.gap == 2u && s.vehicle.ok && s.vehicle.id == 1 && !s.vehicle.player);
+    CHECK(s.vehicle.player_id == 2 && s.session.generation == gen && s.session.subject != sub0);
+    APPROX(s.vehicle.speed_mps, 20.f, 1e-3);
+    CHECK(s.vehicle.gear_ok && s.vehicle.gear == 2);
+    APPROX(s.power_unit.rpm, 600.f * 9.5492966f, 0.1);
+    CHECK(s.input.ok);
+    APPROX(s.input.throttle, 0.2f, 1e-5);
+    CHECK(s.energy.store_ok && s.energy.power_ok);
+    APPROX(s.energy.store_j, 2e6f, 1.0);
+    APPROX(s.energy.deploy_w, 20e3f, 1.0);
+    CHECK(s.vehicle.ai_driving); // the AI drives car 1
+    CHECK(s.progress.ok && s.field.ok && s.field.player_rank == 1 && s.field.classified);
+    APPROX(s.progress.total_m, 8000.f, 1e-2);
+    {
+        const View &v = upd(); // the rival: the car ahead of the watched car; the G-meter off while spectating
+        CHECK(v.live && v.rival_id == 0 && v.kmh == 72 && v.gear == 2 && !v.gmeter.on);
+        Leaves L;
+        publish(L, v, 0.0);
+        CHECK(L.wanted("rv00") && !L.wanted("rv01") && L.wanted("spd") && L.wanted("g2") && !L.wanted("gm"));
+    }
+
+    // between scans the watched car is re-read every frame: its new speed shows at once
+    set_drive(c[1], 0.f, 25.f, 3, 600.f, 0.2f, 0.f, 0);
+    p.sample(2.21, s);
+    CHECK(!p.raw().scanned && s.spectate.on && s.vehicle.id == 1);
+    APPROX(s.vehicle.speed_mps, 25.f, 1e-3);
+
+    // F8: the next car (3); the subject bumps again, the car set does not; car 3 (P4) sees the player's car ahead
+    const uint32_t sub1 = s.session.subject;
+    set_director(d, 1, 1, 3, 2);
+    p.sample(2.35, s);
+    CHECK(s.spectate.on && s.vehicle.id == 3 && s.session.subject != sub1 && s.session.generation == gen);
+    CHECK(upd().rival_id == 2);
+
+    // a value the game does not give for the watched car is not shown, never the player's: car 3's gearbox fails its
+    // check (back-pointer), the safety car has no ERS
+    put<uintptr_t>(c[3].gearbox, 8, 0);
+    p.sample(2.5, s);
+    CHECK(s.vehicle.id == 3 && !s.vehicle.gear_ok && s.vehicle.speed_ok);
+    {
+        const View &v = upd();
+        Leaves L;
+        publish(L, v, 0.0);
+        CHECK(!v.gear_ok);
+        for (int i = 0; i <= 8; ++i)
+            CHECK(!L.wanted("g" + std::to_string(i)));
+    }
+    put<uintptr_t>(c[3].gearbox, 8, uintptr_t(c[3].car));
+    set_director(d, 1, 1, 4, 2);
+    p.sample(2.6, s);
+    CHECK(s.spectate.on && s.vehicle.id == 4 && !s.energy.store_ok && !s.energy.power_ok && s.field.player_rank == -1);
+    {
+        const View &v = upd();
+        Leaves L;
+        publish(L, v, 0.0);
+        CHECK(v.live && !v.energy_ok && v.rival_id == -1 && !L.wanted("dp01") && !L.wanted("dp02"));
+    }
+
+    // spectating the player's own car: the player's values; the meter stays off while spectating
+    set_director(d, 1, 1, 2, 1);
+    p.sample(2.7, s);
+    CHECK(s.spectate.on && player_values() && !upd().gmeter.on);
+
+    // no car (0xff), a vehicle id past the table (7), a slot without a car: the player's car
+    const uint8_t bad_ids[] = {0xff, 7};
+    double t = 2.8;
+    for (uint8_t bad : bad_ids) {
+        set_director(d, 1, 1, bad, 1);
+        p.sample(t, s);
+        t += 0.1;
+        CHECK(!s.spectate.on && player_values());
+    }
+    set_director(d, 1, 1, 3, 1);
+    g.table[3] = 0;
+    p.sample(t, s);
+    t += 0.1;
+    CHECK(!s.spectate.on && player_values() && s.session.generation == gen);
+    g.table[3] = uintptr_t(c[3].car);
+    p.sample(t, s);
+    t += 0.1;
+    CHECK(s.spectate.on && s.vehicle.id == 3);
+
+    // the spectator HUD goes down (+0xd0 0) or the director stops (+0xd1 0): the player's car, the meter back on
+    set_director(d, 0, 1, 3, 1);
+    p.sample(t, s);
+    t += 0.1;
+    CHECK(!s.spectate.on && player_values() && upd().gmeter.on);
+    set_director(d, 1, 1, 3, 1);
+    p.sample(t, s);
+    t += 0.1;
+    CHECK(s.spectate.on && s.vehicle.id == 3);
+    set_director(d, 1, 0, 3, 1);
+    p.sample(t, s);
+    t += 0.1;
+    CHECK(!s.spectate.on && player_values() && p.raw().spect_vid == -1);
+    // the director leaves the registry: the player's car
+    set_director(d, 1, 1, 3, 1);
+    p.sample(t, s);
+    t += 0.1;
+    CHECK(s.spectate.on && s.vehicle.id == 3);
+    put<uintptr_t>(r.slots, size_t(150) * 16, 0);
+    p.sample(t, s);
+    CHECK(!s.spectate.found && !s.spectate.on && player_values() && s.session.generation == gen);
+
+    // another build's symbols (no key): never spectates
+    gs::F1_25Symbols nokey = sym;
+    nokey.spectate_key = 0;
+    gs::F1_25Provider q(nokey, true);
+    q.sample(5.0, s);
+    CHECK(!s.spectate.found && player_values());
+}
+
 static void test_levels()
 {
     CHECK(stripe_level(0.f) == 0 && stripe_level(1.f) == kStripes && stripe_level(0.5f) == 5);
     CHECK(cap_level(2.f) == kCapLevels && cap_level(-1.f) == 0);
+}
+
+// The halo in 2025 and F2 cars (docs/halo-car-classes.md): the 2025 capsules show the same MGU-K power on a fixed
+// 120 kW scale whatever limit the car reports (the 2026 capsules keep the car's own limit), and the setting all_cars
+// reaches the template as leaf cls, also while the car is not read.
+static void test_classes()
+{
+    gs::GameState s;
+    s.compatible = true;
+    s.session.active = true;
+    s.vehicle.ok = true;
+    s.energy.power_ok = true;
+    s.energy.max_deploy_ok = true;
+    s.energy.max_deploy_w = 126.3e3f;   // what the 2025 cars reported in the 2026-11-09 Montreal drives
+    s.energy.deploy_w = 60e3f;
+    HudModel m;
+    for (int i = 0; i < 60; ++i) // 1 s at 60 fps: the 20 ms easing has settled
+        m.update(s, 1 / 60.0, HudConfig{});
+    {
+        const View &v = m.view();
+        APPROX(v.deploy, (60e3 - 2e3) / 126.3e3, 1e-4);
+        APPROX(v.deploy25, (60e3 - 2e3) / 120e3, 1e-4);
+        CHECK(v.recharge25 < 1e-6f && v.all_cars);
+        Leaves L;
+        publish(L, v, 0.0);
+        CHECK(L.wanted("dp07") && L.wanted("dk08") && !L.wanted("dk07") && L.wanted("cls"));
+        for (int i = 1; i <= kCapLevels; ++i)
+            CHECK(!L.wanted("rk" + two(i)));
+    }
+    // full harvest (the logged 2025 peak, 119.985 kW): the 2025 recharge capsule is full, the 2026 one is not
+    s.energy.deploy_w = 0;
+    s.energy.harvest_k_w = 119.985e3f;
+    for (int i = 0; i < 60; ++i)
+        m.update(s, 1 / 60.0, HudConfig{true, true, false, false});
+    {
+        const View &v = m.view();
+        CHECK(!v.all_cars);
+        Leaves L;
+        publish(L, v, 0.0);
+        CHECK(L.wanted("rk16") && L.wanted("rc15") && !L.wanted("rc16") && !L.wanted("cls"));
+        for (int i = 1; i <= kCapLevels; ++i)
+            CHECK(!L.wanted("dk" + two(i)));
+    }
+    // power unreadable: no capsule; the car not read: still no capsule, the setting still published
+    s.energy.power_ok = false;
+    m.update(s, 1 / 60.0, HudConfig{});
+    {
+        Leaves L;
+        publish(L, m.view(), 0.0);
+        for (int i = 1; i <= kCapLevels; ++i)
+            CHECK(!L.wanted("rk" + two(i)) && !L.wanted("dk" + two(i)));
+        CHECK(L.wanted("cls"));
+    }
+    s.vehicle.ok = false;
+    m.update(s, 1 / 60.0, HudConfig{true, true, false, false});
+    {
+        Leaves L;
+        publish(L, m.view(), 0.0);
+        CHECK(!m.view().live && !L.wanted("cls") && !L.wanted("rk16"));
+    }
+    m.update(s, 1 / 60.0, HudConfig{});
+    {
+        Leaves L;
+        publish(L, m.view(), 0.0);
+        CHECK(L.wanted("cls"));
+    }
 }
 
 // The leaves publish() writes, for tools/native/check_leaves.py (template bindings must all be written).
@@ -882,7 +1411,8 @@ static void test_leaf_names(const char *out_path)
     v.live = true;
     publish(L, v, 0.0);
     const std::vector<std::string> p = L.paths();
-    CHECK(p.size() == size_t(4 + 9 + 2 * kStripes + 2 * kCapLevels + 3 + 4 + kRivalSlots));
+    CHECK(p.size() == size_t(4 + 9 + 2 * kStripes + 2 * kCapLevels + 3 + 4 + kRivalSlots + 3 + 20 + kGSegments + 2 * kGAxes +
+                             1 + 2 * kCapLevels));
     if (!out_path)
         return;
     FILE *f = std::fopen(out_path, "w");
@@ -897,7 +1427,7 @@ static void test_leaf_names(const char *out_path)
 // Per-frame cost with a full 22-car field at 120 fps (not a pass/fail check: the numbers go into
 // docs/qa/performance.md). Every provider read is a ReadProcessMemory call, as in game. publish() is timed
 // separately: without swofty_core.dll every hud::set fails and is retried, which never happens in game.
-static void bench_frame()
+static void bench_frame(bool watching = false)
 {
     FakeGame g;
     make_world(g, 24);
@@ -917,6 +1447,10 @@ static void bench_frame()
     make_controllers(ctl, 22, 7);
     gs::F1_25Symbols sym = with_controllers(symbols(g), ctl);
     sym.results_key = uintptr_t(results_key_static);
+    // the spectator director in the registry (one copy per scan); watching: the spectator HUD up on car 12, so the
+    // watched car's header is re-read every frame too
+    sym.spectate_key = uintptr_t(spectate_key_static);
+    set_director(add_director(r, 300), watching ? 1 : 0, watching ? 1 : 0, 12, 1);
     gs::F1_25Provider p(sym, true);
     gs::GameState s;
     HudModel m;
@@ -944,11 +1478,13 @@ static void bench_frame()
             worst[k] = std::max(worst[k], d);
         }
     }
-    CHECK(s.vehicle.ok && s.field.n == 22 && s.field.classified && m.view().rival_id == 6);
+    CHECK(s.vehicle.ok && s.field.n == 22 && s.field.classified && m.view().rival_id == (watching ? 11 : 6));
+    CHECK(s.spectate.on == watching && s.vehicle.id == (watching ? 12 : 7));
     CHECK(scans >= n / 13 && scans <= n / 11 + 1); // 10 Hz at 120 fps: one frame in 12
-    std::printf("bench (22 cars, 120 fps, %d frames, %d full scans): provider %.1f us mean / %.1f us worst, "
+    std::printf("bench%s (22 cars, 120 fps, %d frames, %d full scans): provider %.1f us mean / %.1f us worst, "
                 "model %.2f us mean, publish %.1f us mean (test-only retries)\n",
-                n, scans, sum[0] / n * 1e6, worst[0] * 1e6, sum[1] / n * 1e6, sum[2] / n * 1e6);
+                watching ? " spectating" : "", n, scans, sum[0] / n * 1e6, worst[0] * 1e6, sum[1] / n * 1e6,
+                sum[2] / n * 1e6);
     auto pct = [](std::vector<double> v, double q) {
         std::sort(v.begin(), v.end());
         return v.empty() ? 0.0 : v[std::min(v.size() - 1, size_t(q * double(v.size())))];
@@ -963,15 +1499,21 @@ int main(int argc, char **argv)
     test_decode();
     test_new_session();
     test_classification();
+    test_classification_no_ers();
     test_controllers();
     test_progress();
+    test_distance_reference();
     test_player();
     test_pit_exit();
     test_car_identity();
     test_tracks();
+    test_learned_turns();
+    test_spectate();
     test_levels();
+    test_classes();
     test_leaf_names(argc > 1 ? argv[1] : nullptr);
     bench_frame();
+    bench_frame(true);
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
