@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "nick.f1-2026-halo",
   "name": "Project Halo",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "nyannoying",
   "icon": "icons/halo.png",
   "description": "The 2026 F1 world feed's onboard halo for 2026, 2025 and F2 cars, an animated broadcast-style timing tower, the Race Control banner and an optional G-force meter, drawn by F1 25's own HUD. Read from the game itself: no UDP telemetry, no companion app.",
@@ -66,7 +66,7 @@
       "label": "Validation log",
       "default": false,
       "binds": "native",
-      "description": "Off by default. Records what the halo and the timing tower read from the game to %LOCALAPPDATA%\\nick.f1-2026-halo\\diag as CSV (two files, up to 64 MB each per launch) and shows a status line under the tower. Turn on only to send a log."
+      "description": "Off by default. Records what the halo and the timing tower read from the game as CSV to the addon's diag folder in the game folder (two files, up to 64 MB each per launch) and shows a status line under the tower. Turn on only to send a log."
     },
     {
       "id": "tower_on",

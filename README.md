@@ -64,7 +64,7 @@ In ADDON SETTINGS on the home menu (directly under Career, or F9 / R3), or in th
 | Team logos | On | Each driver's team logo next to the name |
 | Highlight my row | On | Your own row a little brighter |
 | Animations | On | Rows slide when cars change places, the arrow rides in with its row, the position number and a new best lap time fade in, and flag cards slide in and out of the header. Off: every change shows at once |
-| Validation log | Off | Writes what the halo and the tower read from the game as CSV to `%LOCALAPPDATA%\nick.f1-2026-halo\diag` (two files, up to 64 MB each per launch) and shows a status line under the tower. Turn it on only to send a log |
+| Validation log | Off | Writes what the halo and the tower read from the game as CSV to `swofty\addons\nick.f1-2026-halo\diag` in the F1 25 game folder (two files, up to 64 MB each per launch) and shows a status line under the tower. Turn it on only to send a log |
 
 ## Beta status
 
@@ -88,7 +88,7 @@ In ADDON SETTINGS on the home menu (directly under Career, or F9 / R3), or in th
 - Split screen: the halo hides, because two cars are driven by players.
 - Spectating offline needs a spectator addon. The spectator view was tested with Spectator/Broadcast Mode.
 
-**Something not working?** Turn on **Validation log**, drive a few laps, then attach the newest `halo_*.csv` and `tower_*.csv` from `%LOCALAPPDATA%\nick.f1-2026-halo\diag` (zipped) and your `loader.log` (newest folder in `%LOCALAPPDATA%\Swofty\sessions`) to an [issue](https://github.com/nyannoying1337/f1-25-project-halo/issues).
+**Something not working?** Turn on **Validation log**, drive a few laps, then attach the newest `halo_*.csv` and `tower_*.csv` from `swofty\addons\nick.f1-2026-halo\diag` in the F1 25 game folder (zipped) and your `loader.log` (newest folder in `%LOCALAPPDATA%\Swofty\sessions`) to an [issue](https://github.com/nyannoying1337/f1-25-project-halo/issues).
 
 ## How it works
 

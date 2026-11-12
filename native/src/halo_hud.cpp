@@ -151,9 +151,11 @@ void init(App &A)
                     "shows nothing it cannot read");
     if (validation_log) {
         if (diag::start())
-            swofty::log("[halo-re] validation log: %s", diag::path_utf8());
+            swofty::log("[halo-re] validation log: swofty/addons/nick.f1-2026-halo/%s in the game folder",
+                        diag::path_utf8());
         else
-            swofty::log("[halo-re] validation log: could not create the file under %%LOCALAPPDATA%%");
+            swofty::log("[halo-re] validation log: could not create the file in the addon's folder (the launcher's "
+                        "storage is not available)");
     }
 }
 

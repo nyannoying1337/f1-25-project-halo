@@ -15,6 +15,8 @@
 #include <thread>
 #include <vector>
 
+#include <swofty/storage.hpp>
+
 namespace halo::diag {
 namespace {
 
@@ -34,9 +36,28 @@ std::vector<Record> g_fill, g_drain;
 std::vector<TowerRec> g_tfill, g_tdrain;
 std::atomic<bool> g_started{false};
 std::atomic<uint64_t> g_dropped{0}, g_tdropped{0};
-std::string g_path, g_tpath;
-FILE *g_file = nullptr, *g_tfile = nullptr;
+// The two files, as paths inside the addon's own folder (swofty/addons/nick.f1-2026-halo/, the SDK's storage API:
+// nothing is written outside the game and addon folders). g_file and g_tfile say a file is open; the lines of a
+// writer pass collect in g_out and g_tout and go out in one append.
+std::string g_path, g_tpath, g_out, g_tout;
+bool g_file = false, g_tfile = false;
 size_t g_bytes = 0, g_tbytes = 0;
+Sink g_sink = nullptr;
+
+bool storage_sink(const char *path, const char *data, size_t n)
+{
+    return swofty::storage::append(path, std::string_view(data, n)) == swofty::storage::Result::ok;
+}
+
+// Send what a pass collected. A failed append closes the file: the storage went away, no point in piling up text.
+void flush(std::string &out, const std::string &path, bool &open)
+{
+    if (out.empty())
+        return;
+    if (open && !g_sink(path.c_str(), out.data(), out.size()))
+        open = false;
+    out.clear();
+}
 
 const char *kHeader =
     "t,frame,compatible,active,generation,cars,session_type,track_len_m,track_name,"
@@ -127,12 +148,12 @@ void write_record(const Record &r)
     if (n <= 0 || !g_file)
         return;
     if (g_bytes + size_t(n) > kMaxBytes) {
-        std::fputs("# size limit reached: logging stopped\n", g_file);
-        std::fclose(g_file);
-        g_file = nullptr;
+        g_out += "# size limit reached: logging stopped\n";
+        flush(g_out, g_path, g_file);
+        g_file = false;
         return;
     }
-    std::fwrite(line, 1, size_t(n), g_file);
+    g_out.append(line, size_t(n));
     g_bytes += size_t(n);
 }
 
@@ -596,12 +617,12 @@ void write_tower(const TowerRec &r)
     }
     o.ch('\n');
     if (g_tbytes + o.n > kMaxBytes) {
-        std::fputs("# size limit reached: logging stopped\n", g_tfile);
-        std::fclose(g_tfile);
-        g_tfile = nullptr;
+        g_tout += "# size limit reached: logging stopped\n";
+        flush(g_tout, g_tpath, g_tfile);
+        g_tfile = false;
         return;
     }
-    std::fwrite(line, 1, o.n, g_tfile);
+    g_tout.append(line, o.n);
     g_tbytes += o.n;
 }
 
@@ -617,56 +638,41 @@ void writer()
         for (const Record &r : g_drain)
             write_record(r);
         g_drain.clear();
-        if (g_file)
-            std::fflush(g_file);
+        flush(g_out, g_path, g_file);
         for (const TowerRec &r : g_tdrain)
             write_tower(r);
         g_tdrain.clear();
-        if (g_tfile)
-            std::fflush(g_tfile);
+        flush(g_tout, g_tpath, g_tfile);
     }
-}
-
-std::wstring widen(const std::string &s)
-{
-    std::wstring w(s.size() + 1, L'\0');
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), int(w.size()));
-    w.resize(n > 0 ? size_t(n - 1) : 0);
-    return w;
 }
 
 } // namespace
 
-bool start()
+bool start(Sink sink)
 {
     bool expected = false;
     if (!g_started.compare_exchange_strong(expected, true))
-        return g_file != nullptr;
-    char base[MAX_PATH];
-    DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", base, sizeof base);
-    if (!n || n >= sizeof base)
+        return g_file;
+    g_sink = sink ? sink : storage_sink;
+    if (!sink && !swofty::storage::available())
         return false;
-    std::string dir = std::string(base) + "\\nick.f1-2026-halo";
-    CreateDirectoryW(widen(dir).c_str(), nullptr);
-    dir += "\\diag";
-    CreateDirectoryW(widen(dir).c_str(), nullptr);
     std::time_t t = std::time(nullptr);
     std::tm tm{};
     localtime_s(&tm, &t);
     char stamp[32];
     std::strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", &tm);
-    g_path = dir + "\\halo_" + stamp + ".csv";
-    g_file = _wfopen(widen(g_path).c_str(), L"wb");
-    if (!g_file)
+    g_path = std::string("diag/halo_") + stamp + ".csv";
+    if (!g_sink(g_path.c_str(), kHeader, std::strlen(kHeader)))
         return false;
-    g_bytes = std::fwrite(kHeader, 1, std::strlen(kHeader), g_file);
+    g_file = true;
+    g_bytes = std::strlen(kHeader);
     g_fill.reserve(kBatch);
     g_drain.reserve(kBatch);
     // the timing tower's companion log, same stamp (tools/ingame/analyze_diag.py reads both)
-    g_tpath = dir + "\\tower_" + stamp + ".csv";
-    g_tfile = _wfopen(widen(g_tpath).c_str(), L"wb");
-    if (g_tfile) {
-        g_tbytes = std::fwrite(kTowerHeader, 1, std::strlen(kTowerHeader), g_tfile);
+    g_tpath = std::string("diag/tower_") + stamp + ".csv";
+    if (g_sink(g_tpath.c_str(), kTowerHeader, std::strlen(kTowerHeader))) {
+        g_tfile = true;
+        g_tbytes = std::strlen(kTowerHeader);
         g_tfill.reserve(kTowerBatch);
         g_tdrain.reserve(kTowerBatch);
     }

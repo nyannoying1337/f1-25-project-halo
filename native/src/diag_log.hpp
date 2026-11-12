@@ -1,5 +1,6 @@
 // In-game validation log: what the provider read and what the halo showed, 30 times a second, written
-// as CSV by a background thread to %LOCALAPPDATA%\nick.f1-2026-halo\diag\. The frame thread only copies a
+// as CSV by a background thread to diag/ in the addon's own folder (swofty/addons/nick.f1-2026-halo/ in the game
+// folder, through the SDK's storage API; the launcher keeps the files between sessions). The frame thread only copies a
 // fixed-size record into a preallocated buffer (never blocks: a busy buffer drops the record and counts it).
 // tools/ingame/analyze_diag.py turns a log into the field verification report.
 #pragma once
@@ -49,13 +50,16 @@ struct TowerRec {
     tower::HeadEvents hdpub, hdanim;    // the header's writes and its own snaps since the last record
 };
 
-// Start the writer (first call only). Returns false when the folder cannot be created.
-bool start();
+// Where the text goes: append `n` bytes to the file `path` (relative, e.g. "diag/halo_<stamp>.csv"), false when that
+// failed. The default is the SDK's storage API; the host tests pass their own.
+using Sink = bool (*)(const char *path, const char *data, size_t n);
+// Start the writer (first call only). Returns false when the file cannot be created (no storage API).
+bool start(Sink sink = nullptr);
 // Queue one record (frame thread). Cheap; drops the record if the writer holds the buffer.
 void record(const gs::GameState &s, const gs::F1_25Raw &raw, const Shown &shown);
 // Queue one tower record (frame thread, 10 Hz). Same rules as record().
 void record_tower(const TowerRec &r);
-// The file being written, for the log ("" before start()).
+// The file being written, relative to the addon's folder, for the log ("" before start()).
 const char *path_utf8();
 
 }

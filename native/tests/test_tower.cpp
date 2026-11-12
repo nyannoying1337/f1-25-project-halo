@@ -2930,12 +2930,25 @@ static int ok_set(void *, const char *, LeafType, const void *) { return 0; }
 // fake game, 10 records a second as in the DLL: every line has the header's 66 columns. Copied to
 // <out>/tower_sample.csv for tools/ingame/analyze_diag.py, whose "Tower: shown values" check must pass on it
 // (the C++ writer and the Python parser agree on the format).
+// The log's sink in the tests: the file under <out>/ instead of the addon's folder (no launcher here).
+static std::string g_log_dir;
+static bool log_file_sink(const char *path, const char *data, size_t n)
+{
+    CreateDirectoryA((g_log_dir + "/diag").c_str(), nullptr);
+    FILE *f = std::fopen((g_log_dir + "/" + path).c_str(), "ab");
+    if (!f)
+        return false;
+    bool ok = std::fwrite(data, 1, n, f) == n;
+    std::fclose(f);
+    return ok;
+}
+
 static void test_log_writer(const char *out_dir)
 {
     if (!out_dir)
         return;
-    SetEnvironmentVariableA("LOCALAPPDATA", out_dir);
-    CHECK(halo::diag::start());
+    g_log_dir = out_dir;
+    CHECK(halo::diag::start(log_file_sink));
     FakeTower f = make_tower();
     set_pit(f, 4, 3);
     set_gap(f, N - 1 - 4, 4, 0, false, 0, false); // in the pit lane: the game cleared both flags
@@ -3033,7 +3046,7 @@ static void test_log_writer(const char *out_dir)
     }
     Sleep(1500); // the writer drains every 0.5 s
     WIN32_FIND_DATAA fd;
-    const std::string dir = std::string(out_dir) + "/nick.f1-2026-halo/diag/";
+    const std::string dir = std::string(out_dir) + "/diag/";
     HANDLE h = FindFirstFileA((dir + "tower_*.csv").c_str(), &fd);
     CHECK(h != INVALID_HANDLE_VALUE);
     if (h == INVALID_HANDLE_VALUE)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 beta
+
+The validation log now stays inside the game folder. Nothing changes in the halo or the timing tower. Everything from 0.2.0 is in this release.
+
+### Changed
+
+- **Validation log:** the two CSV files are now written to `swofty\addons\nick.f1-2026-halo\diag` in the F1 25 game folder, through the Swofty launcher's own storage. They used to go to a folder under `%LOCALAPPDATA%`. The launcher keeps the files between sessions. The option is still off by default.
+
 ## 0.2.0 beta
 
 The timing tower now moves like the broadcast: rows slide into their new places when cars change positions, and flag cards slide in and out of the header. It also shows lap times in practice and qualifying and the fastest lap in races, follows the Spectator Menu and takes fields of up to 30 cars. The halo looks closer to the broadcast.
