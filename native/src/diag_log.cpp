@@ -51,7 +51,7 @@ const char *kHeader =
     "hud_energy_ok,hud_rc_lv,hud_dp_lv,hud_boost,hud_race,hud_turn,hud_rival_id,scan,cost_mean_us,cost_max_us,cost_frames,dropped,"
     "vcount,slots,old_check,hud_turn_right,dist_win_s,turn_shift_m,"
     "hud_g_on,hud_g_tenths,hud_g_segs,hud_g_axis,hud_g_red_bar,hud_g_red_digits,"
-    "spect_found,spect_ui,spect_gap\n";
+    "spect_found,spect_ui,spect_gap,spect_detail\n";
 
 void write_record(const Record &r)
 {
@@ -96,7 +96,7 @@ void write_record(const Record &r)
         "%d,%d,%d,%d,%d,%s,%d,%d,%.1f,%.1f,%d,%llu,"
         "%u,%s,%d,%d,%.3f,%.1f,"
         "%d,%d,%u,%d,%d,%d,"
-        "%d,%d,%lld\n",
+        "%d,%d,%lld,%lld\n",
         s.time, (unsigned long long)s.frame, s.compatible, s.session.active, s.session.generation, s.session.cars,
         s.session.type_ok ? s.session.type : 9999u, s.session.track_ok ? s.session.track_length_m : -1.f, name,
         s.vehicle.ok, s.vehicle.id, s.vehicle.ai_driving, w.is_ai, s.vehicle.speed_ok, s.vehicle.speed_mps * 3.6f,
@@ -119,10 +119,11 @@ void write_record(const Record &r)
         h.cost_mean_us, h.cost_max_us, h.cost_frames, (unsigned long long)g_dropped.load(),
         unsigned(w.vcount), slots, int(w.old_check), h.turn_right, w.distance_window, h.turn_shift,
         int(h.g_on), h.g_tenths, unsigned(h.g_segs), h.g_axis, int(h.g_red_bar), int(h.g_red_digits),
-        // the spectator director (docs/spectator-ui.md §2): found in the registry; +0xd0 and +0xe4 as read, -1 unread.
+        // the spectator director (docs/spectator-ui.md §2, 10.4): found in the registry; +0xd0, +0xe4 (Gap) and +0xe8
+        // (Detail) as read, -1 unread.
         // Whether the halo follows the watched car: spect_found, spect_ui != 0, spect_vid >= 0 and veh_id == spect_vid
         int(s.spectate.found), s.spectate.read ? int(s.spectate.ui) : -1,
-        s.spectate.read ? (long long)s.spectate.gap : -1LL);
+        s.spectate.read ? (long long)s.spectate.gap : -1LL, s.spectate.read ? (long long)s.spectate.detail : -1LL);
     if (n <= 0 || !g_file)
         return;
     if (g_bytes + size_t(n) > kMaxBytes) {
@@ -147,7 +148,7 @@ const char *kTowerHeader =
     "tyre,"
     "pen_ok,pen_n,pen_seq,pen_recs,mc_ok,dt,sg,warn,"
     "shown,found,read_us,model_us,publish_us,writes,halo_writes,copies,jobs,dropped,set,"
-    "bdg,rbdg,bdgkeys,bdgvec,gmode,trial\n";
+    "bdg,rbdg,bdgkeys,bdgvec,gmode,trial,blap,ko,fx,fl,lbest,lfc,mtb,grid,stops,bst,anim,apk,hdk\n";
 
 // A bounded appender: never writes past the buffer, keeps it NUL-terminated.
 struct Out {
@@ -346,7 +347,7 @@ void write_tower(const TowerRec &r)
     const Badges &bd = s.badges;
     for (int vid = 0; vid <= last; ++vid) {
         const BadgeRead &b = bd.car[vid];
-        o.ch(b.state == kBadgeKey && b.key >= 0 && b.key < 26 ? char('a' + b.key)
+        o.ch((b.state == kBadgeKey || b.state == kBadgeRender) && b.key >= 0 && b.key < 26 ? char('a' + b.key)
              : b.state == kBadgeOther                         ? '?'
              : b.state == kBadgeFailed                        ? char('0' + (b.step <= 9 ? b.step : 9))
                                                               : '.');
@@ -363,6 +364,8 @@ void write_tower(const TowerRec &r)
         listed_gen = r.generation;
         for (int k = 0; k < bd.keys && k < 26; ++k) {
             o.add(k ? " %c=" : "%c=", char('a' + k));
+            if (bd.render[k]) // a render badge's key, after a '!'
+                o.ch('!');
             for (const char *q = bd.key[k]; *q && q < bd.key[k] + kBadgeKeyMax; ++q)
                 std::strchr(",\" %=", *q) ? o.add("%%%02X", unsigned((unsigned char)*q)) : o.ch(*q);
         }
@@ -391,6 +394,206 @@ void write_tower(const TowerRec &r)
     else
         o.ch('-');
     o.add(",%d", int(v.trial));
+    // blap: each car's lap time from its results entry (the field the best laps show), in the game's
+    // ms (game_lap_ms), by vehicle id, '-' none read; then '/' P1's time ('-' none), cars with a time and best_inv.
+    // A best lap only ever falls during a session; a last lap also rises. '-' alone: no car's time was read.
+    o.ch(',');
+    bool any_lap = false;
+    for (int vid = 0; vid <= last; ++vid)
+        any_lap = any_lap || c.lap_ok[vid];
+    if (any_lap) {
+        for (int vid = 0; vid <= last; ++vid)
+            c.lap_ok[vid] ? o.add(vid ? " %lld" : "%lld", (long long)game_lap_ms(c.lap_s[vid])) : o.dash(vid);
+        v.best_p1 >= 0 ? o.add("/%lld/%d/%d", (long long)v.best_p1, v.best_n, v.best_inv)
+                       : o.add("/-/%d/%d", v.best_n, v.best_inv);
+    } else
+        o.ch('-');
+    // ko: the last position that goes through in a knockout session (Q1, Q2, SQ1, SQ2), '-' none
+    v.ko_safe > 0 ? o.add(",%d", v.ko_safe) : o.add(",-");
+    // fx: the lap time flashes by vehicle id, "3p 7g" (p purple, g green), '-' none
+    o.ch(',');
+    bool any_fx = false;
+    for (int vid = 0; vid < kCars; ++vid)
+        if (v.fx[vid]) {
+            o.add(any_fx ? " %d%c" : "%d%c", vid, v.fx[vid] == 2 ? 'p' : 'g');
+            any_fx = true;
+        }
+    if (!any_fx)
+        o.ch('-');
+    // fl: the race's fastest lap holder and its time in the game's ms, "vid:ms", '-' none: the
+    // game's fastest car (VehicleLapTimes +0xb8) and its best valid lap from its lap table ("vid:-" unknown)
+    if (v.fl_vid >= 0)
+        v.fl_ms >= 0 ? o.add(",%d:%lld", v.fl_vid, (long long)v.fl_ms) : o.add(",%d:-", v.fl_vid);
+    else
+        o.add(",-");
+    // lbest: each car's best valid lap from VehicleLapTimes (races only), in the game's ms, by vehicle
+    // id, '-' none; then '/' the entry (lap index) of each, '-' none. '-' alone: no car's best lap known
+    const LapTimes &lt = s.laps;
+    o.ch(',');
+    bool any_lb = false;
+    for (int vid = 0; vid < kCars; ++vid)
+        any_lb = any_lb || lt.best_ok[vid];
+    if (any_lb) {
+        for (int vid = 0; vid <= last; ++vid)
+            lt.best_ok[vid] ? o.add(vid ? " %lld" : "%lld", (long long)lt.best_ms[vid]) : o.dash(vid);
+        o.ch('/');
+        for (int vid = 0; vid <= last; ++vid)
+            lt.best_ok[vid] ? o.add(vid ? " %d" : "%d", int(lt.best_lap[vid])) : o.dash(vid);
+    } else
+        o.ch('-');
+    // lfc: the game's fastest car byte (VehicleLapTimes +0xb8): the vehicle id, 'n' none (0xff), '-'
+    // unread (not a race, or the system or its vector unreadable); then ':' the lap times run's state ('o' read,
+    // 'x' not)
+    if (!lt.fastest_ok)
+        o.add(",-:%c", lt.ok ? 'o' : 'x');
+    else if (lt.fastest == laptimes::none)
+        o.add(",n:%c", lt.ok ? 'o' : 'x');
+    else
+        o.add(",%d:%c", int(lt.fastest), lt.ok ? 'o' : 'x');
+    // mtb: for each car whose badge is the game's render path (My Team kind 1, or a +0x58d record):
+    // "vid:kind:word" with the entrant's badge u32 +0x68 in hex; then "std:word" the player customisation system's
+    // standard badge (+0x1b8) when read. '-' none
+    o.ch(',');
+    bool any_mt = false;
+    for (int vid = 0; vid < kCars; ++vid) {
+        const BadgeRead &b = bd.car[vid];
+        if (!b.ref_ok)
+            continue;
+        o.add(any_mt ? " %d:%d:%08x" : "%d:%d:%08x", vid, int(b.kind), unsigned(b.ref));
+        any_mt = true;
+    }
+    if (bd.std_ok) {
+        o.add(any_mt ? " std:%08x" : "std:%08x", unsigned(bd.std_badge));
+        any_mt = true;
+    }
+    if (!any_mt)
+        o.ch('-');
+    // grid: each car's grid slot from its results entry (the long copy; the spectator's Position
+    // Change is grid minus position), by vehicle id, '-' unread; '-' alone: none read
+    o.ch(',');
+    bool any_grid = false;
+    for (int vid = 0; vid <= last; ++vid)
+        any_grid = any_grid || c.grid[vid];
+    if (any_grid)
+        for (int vid = 0; vid <= last; ++vid)
+            c.grid[vid] ? o.add(vid ? " %d" : "%d", int(c.grid[vid])) : o.dash(vid);
+    else
+        o.ch('-');
+    // stops: each car's pit stop count, the game's own (pit entry +0x14; the spectator's Stops), by
+    // vehicle id, '-' unread; '-' alone: none read
+    const PitLaps &pls = s.pitlaps;
+    o.ch(',');
+    bool any_stop = false;
+    for (int vid = 0; vid <= last; ++vid)
+        any_stop = any_stop || pls.stops_have[vid];
+    if (any_stop)
+        for (int vid = 0; vid <= last; ++vid)
+            pls.stops_have[vid] ? o.add(vid ? " %d" : "%d", int(pls.stops[vid])) : o.dash(vid);
+    else
+        o.ch('-');
+    // bst (while the spectator's Detail is Best): "vid:best:prev:n" per car whose stints were read: the
+    // best lap's number (u8, 255 none, '-' unread), the highest end lap of the stints before the current set ('-'
+    // none) and the stints; the letter shows when prev is below best. '-' none
+    o.ch(',');
+    bool any_bst = false;
+    for (int vid = 0; vid < kCars; ++vid) {
+        const TyreRead &ty = s.tyre[vid];
+        if (!ty.stint_ok)
+            continue;
+        o.add(any_bst ? " %d:" : "%d:", vid);
+        c.best_lap[vid] >= 0 ? o.add("%d:", int(c.best_lap[vid])) : o.add("-:");
+        ty.prev_end >= 0 ? o.add("%d:%d", int(ty.prev_end), int(ty.stints)) : o.add("-:%d", int(ty.stints));
+        any_bst = true;
+    }
+    if (!any_bst)
+        o.ch('-');
+    // anim: '-' with the Animations setting off; else the packets made since load: slides,
+    // arrow entries, number fades, flash fades, rest packets (cumulative), the rows moving now, and the snaps since
+    // the last record as letters (o tower off, f first frame, s session or car set, t settle, j replay jump,
+    // p followed car, w window, b bulk; '-' none)
+    const tower::AnimStats &an = r.anim;
+    if (!an.on) {
+        o.add(",-");
+    } else {
+        o.add(",%u %u %u %u %u %d ", an.slides, an.entries, an.nf, an.ff, an.rests, an.moving);
+        static const char kSnapLetter[tower::kSnapReasons] = {'-', 'o', 'f', 's', 't', 'j', 'p', 'w', 'b'};
+        bool any_snap = false;
+        for (int k = 1; k < tower::kSnapReasons; ++k)
+            if (an.snap_bits & (1u << k)) {
+                o.ch(kSnapLetter[k]);
+                any_snap = true;
+            }
+        if (!any_snap)
+            o.ch('-');
+    }
+    // apk: every row event since the last record, in time order: "RR:codes@t" for the codes the publisher
+    // started (written true; u1 ... rs as in leaves.md v12 without the x), "RR:!why@t" for a row whose new car
+    // snapped while the frame could move (enter, far, back, busy, pair); t on the t column's clock; "+N" when N events
+    // did not fit; '-' none
+    {
+        static const char *const kCode[tower::kAnimCodes] = {"u1", "u2", "u3", "d1", "d2", "d3",
+                                                             "eu", "ed", "nf", "ff", "rs"};
+        static const char *const kWhy[6] = {"?", "enter", "far", "back", "busy", "pair"};
+        const tower::RowEvents &a = r.started, &b = r.rowsnaps;
+        int i = 0, j = 0;
+        o.ch(',');
+        if (a.n + b.n == 0)
+            o.ch('-');
+        while (i < a.n || j < b.n) {
+            const bool from_a = j >= b.n || (i < a.n && a.e[i].t <= b.e[j].t);
+            const tower::RowEvent &e = from_a ? a.e[i++] : b.e[j++];
+            o.add(i + j > 1 ? " %02d:" : "%02d:", int(e.row));
+            if (e.what & tower::kEvSnap) {
+                const int why = e.what & 0xff;
+                o.add("!%s", kWhy[why >= 1 && why <= 5 ? why : 0]);
+            } else {
+                bool first = true;
+                for (int k = 0; k < tower::kAnimCodes; ++k)
+                    if (e.what & (1u << k)) {
+                        o.add(first ? "%s" : "+%s", kCode[k]);
+                        first = false;
+                    }
+            }
+            o.add("@%.3f", double(e.t));
+        }
+        if (a.dropped + b.dropped)
+            o.add(" +%u", unsigned(a.dropped + b.dropped));
+    }
+    // hdk: the header's events since the last record, in time order, each "what@t#frame" with the frame
+    // counter of the frame column: "card:K" the card the written leaves show (K chq, red, sc, vsc, yel or none),
+    // "in1"-"in3" / "out1"-"out3" / "rs" a header code started (written true; 1 = the 1 p card, 2 = 2 p, 3 = 2.5 p),
+    // "gh+K" / "gh-K" the exit's copy of card K shown / hidden, "!W:K" the card changed to K (or a motion was cut)
+    // without motion, W: o off, h header setting off, f first frame, s session or car set, j replay jump, t settle,
+    // p followed car, b busy; "+N" when N events did not fit; '-' none
+    {
+        static const char *const kCard[tower::kCardKinds] = {"none", "chq", "red", "sc", "vsc", "yel"};
+        static const char *const kHd[tower::kHeadCodes] = {"in1", "in2", "in3", "out1", "out2", "out3", "rs"};
+        static const char kWhy[tower::kHwReasons] = {'-', 'o', 'h', 'f', 's', 'j', 't', 'p', 'b'};
+        const tower::HeadEvents &a = r.hdpub, &b = r.hdanim;
+        int i = 0, j = 0;
+        o.ch(',');
+        if (a.n + b.n == 0)
+            o.ch('-');
+        while (i < a.n || j < b.n) {
+            // in time order; within one frame the Anim's (decided first) before the publisher's
+            const bool from_b = i >= a.n || (j < b.n && b.e[j].frame <= a.e[i].frame);
+            const tower::HeadEvent &e = from_b ? b.e[j++] : a.e[i++];
+            if (i + j > 1)
+                o.ch(' ');
+            const char *card = kCard[e.card < tower::kCardKinds ? e.card : 0];
+            if (e.kind == 'c')
+                o.add("card:%s", card);
+            else if (e.kind == 'k')
+                o.add("%s", kHd[e.code < tower::kHeadCodes ? e.code : tower::kHeadCodes - 1]);
+            else if (e.kind == 'g')
+                o.add("gh%c%s", e.on ? '+' : '-', card);
+            else
+                o.add("!%c:%s", kWhy[e.why < tower::kHwReasons ? e.why : 0], card);
+            o.add("@%.3f#%u", double(e.t), unsigned(e.frame));
+        }
+        if (a.dropped + b.dropped)
+            o.add(" +%u", unsigned(a.dropped + b.dropped));
+    }
     o.ch('\n');
     if (g_tbytes + o.n > kMaxBytes) {
         std::fputs("# size limit reached: logging stopped\n", g_tfile);

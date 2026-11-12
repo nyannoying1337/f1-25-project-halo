@@ -43,6 +43,7 @@ Leaves: docs/timing-tower/leaves.md (contract, version CONTRACT_VERSION). Only b
 no int32 DLL leaf (the contract asks for the bool forms while int32 bindings are unproven in game).
 """
 import hashlib
+import math
 import os
 import re
 import sys
@@ -58,7 +59,7 @@ import uiops as U  # noqa: E402
 import uinode as N  # noqa: E402
 import halo_native as H  # noqa: E402  (shared helpers only; the halo's build is not changed)
 
-CONTRACT_VERSION = 5          # leaves.md v5 (2026-11-10): trial, show (bool); v4: rNN_badge, rNN_bdg; v3: red, yel, ysec, ysna
+CONTRACT_VERSION = 13         # leaves.md v13: kin1 ... krs, gh_* (header card motion); v12: rNN_xu1 ... rNN_xrs (row motion, no trigger); v11: rNN_u1 ... rNN_st; v10: rNN_dup, rNN_ddn, flap; v9: rows r22-r29, cars c24-c29; v8: rNN_pb, rNN_ob, rNN_fl; v7: clock, rNN_ko; v6: rNN_det; v5: trial, show (bool); v4: rNN_badge, rNN_bdg; v3: red, yel, ysec, ysna
 KT = 0.03                    # scene units per HUD unit
 CAP_EM = H.CAP_EM            # game font cap height / em, measured in game
 
@@ -82,14 +83,34 @@ CLOCK_MODEL = 'hud_session_timer_dynamic'   # the stock template whose time_rema
 HOST, ROOT, CTL, MASK = 'tt_host', 'tt_root', 'tt_ctl', 'mask'
 PV_ROOT = 'tp_root'          # the HUD editor's static copy of the tower (fix round 1), beside tt_root in the cap scene
 # The game's lap counter (template hud_lap_counter, scene lap_counter.idf: F1 logo, session label, LAP x / y) sits
-# right above the tower; it is hidden while the tower shows (fix round 1). Its parts the stock template never shows or
-# hides (so a bound visible here never fights the game's own): every top-level element except the two lap holders,
-# and inside those holders the parts the stock nodes leave alone.
+# right above the tower; it is hidden while the tower shows (fix round 1; its panel). Every part that draws
+# lies in an element that no stock template node targets, and a tower node (tt_lapc > v_tt_lapc_<el>) hides that
+# element while hud_tt_show:
+# - LAPC_HIDE: such parts in the stock scene (fix round 1; seen hidden in game, an in-game Practice screenshot);
+# - LAPC_WRAP: the panel's parts (lap_bg with lap_bg_overlay, edge_base, edge_border, lockup) are each the target
+#   of a stock node, and those drew in game whatever the tower did: earlier builds put tower nodes on them, a later one bound
+#   visible on their own stock nodes; both left the empty panel (in-game Practice screenshots, 2026-11-10,
+#   "empty box still there" without a flag). The build wraps each in a new null of its own (LAPC_WRAPPER + part) at the
+#   part's place in the scene (order, position and every stock name kept; the stock nodes find their parts by name
+#   through the scene's nodeidlookup) and hides the wrapper. The parent-hides-child behaviour is the one fix round 1
+#   shows in game: centre_lap_value's tower node hid the lap texts in it, which stock text nodes target.
 LAPC_TEMPLATE = 'hud_lap_counter.osd_visibility_option'
-LAPC_HIDE = ('car_category_logo', 'edge_base', 'edge_border', 'lap_bg', 'lockup', 'session_icon',
-             'centre_lap_value', 'separator_bg', 'separator_bg_top', 'centre_formation')
+LAPC_HIDE = ('car_category_logo', 'session_icon', 'centre_lap_value', 'separator_bg', 'separator_bg_top',
+             'centre_formation')
+LAPC_WRAP = ('edge_base', 'edge_border', 'lap_bg', 'lockup')
+LAPC_WRAPPER = 'tt_lapw_'
 LAPC_STOCK_KIDS = ('car_category_logo', 'edge_base', 'edge_border', 'holder_formation', 'holder_standard', 'lap_bg',
                    'lockup', 'session_icon')
+# The game's race condition flag message (template hud_left_notification_dynamic, nameId race_condition_flag_message,
+# scene race_condition_flag_message.idf; default layout (0.51, -0.51), the lap counter's place): "LAP 0", CAUTION and
+# SECTOR 3 in a hazard frame over the tower's header (an in-game Practice screenshot). The tower hides it while
+# hud_tt_show with one tower node on FLAGM_PART, the scene element that holds everything it draws and that no stock node
+# targets (its stock nodes target Scene Root, flag_bg and the parts below). The tower's header shows the yellow, SC, VSC,
+# red and chequered states itself.
+FLAGM_TEMPLATE = 'hud_left_notification_dynamic.osd_visibility_option.left_notification.left_message'
+FLAGM_SCENE = 'eaid://ui_package/art/osd/components/message_system/race_condition_flag_message.idf'
+FLAGM_PART = 'boundless'
+FLAGM_NODE = 'tt_flagm'      # the tower's group under a message node (the HUD's and the spectator's)
 # Series logo (round 6): the lap counter scene's reference to the stock logo unit (the model for the header's), the
 # unit and its quad, and the stock lap counter's binding on that quad (node, property, the leaf relative to the lap
 # counter's view model). The HUD binds the same leaf by its absolute path: a HUD element's view model is
@@ -107,8 +128,8 @@ SERIES = '@series_logo'      # a series logo record's leaf in Tower.recs: tower_
 SERIES_EL = 'tt_logo'        # the header's eXRef (the HUD editor's copy keeps the F1 quad tp_f1)
 HUD_LAYOUTS = 'eaid://ui_package/art/osd/screens/hud_layouts/hud_layouts.uidl'
 VM = '#view_model_data.hud_tt_'
-NROWS, NCARS = 22, 24
-# Gap column vs driver code (fix round 1, 2026-11-09; measured on in-game Bahrain screenshots, ui-build.md "Fix round 1").
+NROWS, NCARS = 30, 30
+# Gap column vs driver code (fix round 1, 2026-11-09; measured on an in-game Bahrain screenshot, ui-build.md "Fix round 1").
 # In game the widest 2026 code, HAM (OSD_24_bold), is 1.44 p wide (the drawing's Saira metric said 1.39 p), and the
 # game's number font is about 40 % wider than the drawing's: "+33.7" is 26.3 HUD units wide, so it filled its whole box
 # and sat 0.08 p from the code. Now every code is boxed to CODE_BOX (clampwidth: a longer code squeezes instead of
@@ -124,6 +145,16 @@ NUB = '#session.cars.car{v}.nub_colour'            # the car's team colour (rgba
 BAR_DEFAULT = '#00000000'
 LAPS = '#session.number_of_laps'                    # stock hud_lap_counter binds it (si32)
 CLOCK_IN, CLOCK_STR = '#session.time_remaining', 'time_remaining_str'   # stock session timer formatter
+# the formatter's start pin. Every stock time_remaining_formatter (hud_session_timer_dynamic and both HUD pill
+# stacks) gets exactly one signal, this pin, from its timer's visibility decision ('visible'); the clone got none
+# at first (the clock never showed). tt_ctl's trigger (Track Position's enable) sends it now (check_clock_start).
+CLOCK_PIN = 'formatTime'
+# the HUD's clock goes through an absolute node: the clone writes the clock text into hud_tt_clock (the stock
+# pit lane timer's formatter writes its absolute #session.current_car.pit_lane_timer_str the same way) and the
+# header's clock text reads it. The DLL keeps the node existing ("") while the header is not timed and never writes
+# it while timed (leaves.md v7). A decision on hud_tt_timed also starts the clone ('1': the header turned timed), as
+# the stock timers' visibility decisions do. The replay and spectator copies are unchanged (relative, open).
+CLOCK_OUT_KEY, CLOCK_DECISION = 'clock', 'tt_mv_clock'
 DROPZONE = '#session.dropzone'                      # optional debug display (build flag), int32 -> si32
 # Game values no stock template node binds (the type check needs their type; evidence in leaves.md section 4)
 KNOWN_TYPES = {
@@ -134,7 +165,59 @@ TAGS = {'bool': 'bool', 'text': 'stri', 'int32': 'si32'}
 UIPRE_TEXT, UIPRE_VISIBLE, UIPRE_LOC = 4045306521, 839438211, 3919839003   # .uipre setter keys (stock table)
 # bar (round 4): the logo unit's layer, over the row's fills and the player highlight, under the texts and the retired
 # row's half-opaque layer (so a retired row's bar dims with it)
-LAYER = {'bg': 20, 'hl': 22, 'p1': 23, 'mark': 25, 'bar': 30, 'text': 40, 'dim': 45}
+# ko: the knockout hatch, over the position strip, under the player highlight (10 % white: it shows over the
+# hatch as over the strip), the P1 box, the arrows and the number
+LAYER = {'bg': 20, 'ko': 21, 'hl': 22, 'p1': 23, 'mark': 25, 'bar': 30, 'text': 40, 'dim': 45}
+# the lap time flash's text colours (a static colourOverride on the coloured copies of the timed gap text,
+# as the stock champion label's '#eab51fff') and the race's fastest lap box. Green from the reference clip's
+# personal-best text (measured: median (78, 174, 75), 90th percentile (147, 199, 146) over the glyphs); the clip
+# shows no purple, so the purple is chosen for the dark panel. Display choices, no game value.
+FLASH = {'pb': (0x58, 0xD6, 0x54), 'ob': (0xA6, 0x4B, 0xF4)}
+FLASH_HEX = {k: '#%02x%02x%02xff' % c for k, c in FLASH.items()}
+# the animations ( leaves.md v12). In every live row (never the HUD editor's copy) two nested
+# anim nulls at the row's origin hold everything that belongs to the car: tt_rNN_mu slides it up (the car gained
+# places), tt_rNN_md down; inside them tt_rNN_au and tt_rNN_ad hold the up and down arrows for their entry. Each null
+# has its own clip in the cap scene (anim_clips): translation only (scene y up). A clip is at rest (zero offset) at
+# fraction 0, at fraction 1 and between its segments. A segment holds one motion: from its start offset at fraction a
+# to rest at b, keyed on the broadcast's ease-out (time constant ANIM_TAU) over the play's ANIM_PLAY seconds. A motion is
+# goToFraction(a) + playToFraction(b) on ANIM_CURVE, a linear curve, so the clip's keys alone shape it (seen in game:
+# the game plays a curve of type ease_out with steepness s as (t / T)^s, a slow start [game]); every segment spans the
+# same fraction, so every play is alike whatever a play's length depends on (the curve's period [game]). mu and
+# md hold a segment per distance (1, 2, 3 rows), au and ad one (the entry). The faded texts fade in on FADE_CURVE (UIMOs
+# in the stock fade-in's form). Template nodes: anim_nodes().
+ANIM_NULLS = ('mu', 'md', 'au', 'ad')
+ANIM_ROWS = {'mu': -1.0, 'md': 1.0, 'au': -0.43, 'ad': 0.43}  # start offset per row of distance, in row pitches (y up)
+ANIM_SEGS = {1: (0.05, 0.35), 2: (0.375, 0.675), 3: (0.70, 1.0)}  # rows of distance -> (a, b) on mu and md
+ANIM_ENTRY = (0.70, 1.0)              # the arrow entry's segment on au and ad
+ANIM_EPS = 0.005                      # fraction: the key before a segment (on the profile's extension) and the rest
+                                      # keys around it (a spline through the keys keeps the profile's slope at a)
+ANIM_PLAY = 0.75                      # s: a play's length = ANIM_CURVE's period (tower_anim.hpp kPlay)
+ANIM_TAU = 0.154                      # s: the broadcast's ease-out (50 % at 0.107 s, 90 % at 0.355 s)
+ANIM_KEYS = 20                        # key intervals per segment, closer at the start (anim_keys)
+ANIM_CURVE = 'bc_grid_rundown_item_current'  # linear, 0.75 s, steepness 1 (the game's curve library)
+FADE_CURVE = 'generic_fade_on'        # ease_out, 0.15 s, steepness 2 (the stock fade-in's own curve)
+ANIM_FADES = ('pos', 'gtpb', 'gtob')  # the faded texts tt_rNN_<key>: the number (xnf), the flash copies (xff)
+ANIM_CODES = ('xu1', 'xu2', 'xu3', 'xd1', 'xd2', 'xd3', 'xeu', 'xed', 'xnf', 'xff', 'xrs')  # leaves.md v12, AnimCode order
+CAP_STRTAB = CAP + '?context=animstringtable&file=0'
+CAP_ANIM = 'pill_rotation_anim'        # the cap scene's own animated null: the model of the anim nulls
+# the flag cards slide in and out (leaves.md v13). In the live tower (never the HUD
+# editor's copy) the cards (tt_cards) and the rows (tt_rows) sit in one top-to-bottom stacker (tt_bstk) inside a body
+# that two nested anim nulls move (tt_xin > tt_xout: the rows' mu / md form, ANIM_SEGS, the same ease-out), in a static
+# clip window (tt_clip: the halo's battery and capsule window, dial_mods' eWindow) whose top edge is the header band's
+# bottom edge: tt_clipn takes the rows' old place in tt_stack after tt_top, so the Tower header setting off still puts
+# the rows at the top. kinK: the body starts the card's height up (the new card hidden under the band, the rows where
+# they were) and eases to rest; koutK: it starts the card's height down (the rows where they were) with the card's copy
+# (tt_gh_<card>, hud_tt_gh_<card>) one card height above the cards, and eases to rest: the copy rolls up under the band
+# while the rows close the gap. Every stacker moves with its children: none reads a moving bound.
+BODY_NULLS = ('xin', 'xout')                # tt_xin (outer), tt_xout: named to sort after the rows' clips
+BODY_SIGN = {'xin': 1.0, 'xout': -1.0}      # start offset direction (scene y up): in starts above, out below
+BODY_PITCHES = {1: 1.0, 2: 2.0, 3: 2.5}     # card size (tower_anim.hpp card_size) -> the card's height in row pitches
+CARD_SIZE = {'chq': 1, 'red': 2, 'sc': 2, 'vsc': 3, 'yel': 2}
+CARDS = ('chq', 'red', 'sc', 'vsc', 'yel')  # Card order (tower_anim.hpp); the copies' leaves gh_<card>
+HEAD_CODES = ('kin1', 'kin2', 'kin3', 'kout1', 'kout2', 'kout3', 'krs')   # leaves.md v13, HeadCode order
+CLIP_LEFT, CLIP_RIGHT, CLIP_BOTTOM = 1.0, 4.0, 1.0   # p: the window past the panel (the rows' pit, penalty and
+                                                     # fastest lap marks reach 1.6 p past its right edge) and the rows
+CLIP_Z = -0.12                              # the window's z, as the stock window's and the halo's (content back at 0)
 # the yellow flag block's second line (round 2): the game's own word, localised, then hud_tt_ysec ("2", "1 3").
 # Swap the label here (a game string id, localised): never "TRACK HAZARD" (design decision, 2026-11-09).
 YEL_LABEL = 'lng_sector'
@@ -173,6 +256,28 @@ TRIAL_LOGO_X, TRIAL_LABEL_CAP, TRIAL_LABEL_GAP = 5.0, 5.5, 4.0
 # the session line "LAP 0" as the race line's: a left-to-right stacker in an eCentre, started at -TRIAL_LAP / 2 (HUD
 # units, a typical "LAP 1") so it is centred in case the eCentre keeps it in place
 TRIAL_LAP = 23.5
+# the spectator's Detail cell. Sizes in p. Every text fits its cell
+# unsqueezed at the game's widths (the number style's digits 1.126 caps each, measured 2026-11-09; letters Saira's x
+# the same ratio, about 5 % wider than the game's own board shows them, an in-game "Interval"): the widest texts are a
+# two-digit penalty "15s" (3.13 caps) and the places gained "up 21" (the triangle, DET_GAP and 2.25 caps). The cell
+# runs from the gap column's right edge to the panel's (the '!' box starts there): 0.79 p in races, 0.69 p in timed
+# sessions (their gap column ends 1.3 HUD further right). The sizes keep at least 0.08 p clear on both sides: at
+# 0.22 p a race's "10s" or "up 19" sat 0.05 p (1.5 px at 1080p) from the gap text and read as one string.
+# - races: every text at DET_CAP, centred on the tyre letter (0.26 before, so "10s" squeezed to 0.97 and "15s" did
+#   not fit); the box keeps DET_CLEAR from both edges; places gained or lost: the triangle (sprites pcu / pcd,
+#   DET_ARROW w x h) and the count in its colour, one group centred on the tyre letter;
+# - timed sessions: the menu offers no text there (Detail None, Tyre, Best; spectator-ui.md 10.4), so a text shows only
+#   in the views it does not offer; DET_CAP_T, centred in the narrower cell, so "15s" fits it too.
+DET_CAP, DET_CAP_T = 0.20, 0.17
+DET_CLEAR = 0.075            # the text box's clearance from the gap column's edge and the panel's, each side
+DET_GAP = 0.03               # triangle to count
+DET_ARROW = (0.14, 0.105)    # the places gained / lost triangle (export_tower.js pcu / pcd: the same numbers)
+DIGIT_CAPS = 1.126            # the game's number-style digit advance, in caps (fix round 1; tower_sim GAME_CAPS)
+LAP_CAP = 0.37               # race lap times (the spectator's Gap Fastest Lap): "1:28.6" fits the race gap box
+#                              unsqueezed (5.40 caps; at the number cap 0.428 p it squeezed to about 0.89)
+LAP_CAP_T = 0.28             # timed lap times (P1's best lap, the flash, Gap Fastest Lap): "1:06.506" (7.654
+#                              caps) fits the timed gap box (2.166 p) unsqueezed; at the number cap 0.383 p the game
+#                              squeezed P1's to about 0.73 (an in-game Q1 screenshot)
 
 
 def leaf(key):
@@ -327,9 +432,10 @@ def check_hud_layouts(uidl_bytes):
 class Scene:
     """Builds elements into the bottom cap scene (models: its own quad and null, the halo's eText model, the stock
     lap counter's eCentre, the stock table's eStacker, the stock pill row's eXRef of the team logo unit, the stock lap
-    counter's eXRef of its logo unit)."""
+    counter's eXRef of its logo unit; dial_mods' eWindow, the halo's clip window)."""
 
-    def __init__(self, cap_bytes, dial_bytes, lapc_bytes, stacked_bytes, embs, row_bytes, logo_bytes, cat_bytes):
+    def __init__(self, cap_bytes, dial_bytes, lapc_bytes, stacked_bytes, embs, row_bytes, logo_bytes, cat_bytes,
+                 mods_bytes):
         self.idf = I.Idf(cap_bytes)
         self.entry = self.idf.scenes[0].entry
         self.root = self.entry['scene']
@@ -378,6 +484,22 @@ class Scene:
         self.embs = embs
         self.names = set()
         self.hidden = {}       # element -> hidden by default (= the editor preview state)
+        # the cap's own animated null (one anims entry naming its clip), the model of the rows' anim nulls (the
+        # halo's anim nulls are clones of dial_mods' animated null the same way)
+        self.T_anim = H._find(self.root, CAP_ANIM)
+        assert self.T_anim is not None and I._val(self.T_anim.get('typeName')) == 'eNull', 'cap: no animated null'
+        ents = self.T_anim['anims'].items
+        assert len(ents) == 1 and ents[0]['asset'].type == 'stri', 'cap: the animated null has not one anims entry'
+        assert ents[0]['asset'].value == f'{CAP}/{CAP_ANIM}?context=animation', ents[0]['asset'].value
+        self.anims = []        # the anim nulls (their clips: anim_clips)
+        # the clip window's model, dial_mods' mod_1_icon_fill_mask (the halo's windows clone it): an eWindow of
+        # width x length centred on its position, its extents that rect, no geometry or clip of its own
+        self.T_win = H._find(I.Idf(mods_bytes).scenes[0].entry['scene'], 'mod_1_icon_fill_mask')
+        assert self.T_win is not None and I._val(self.T_win.get('typeName')) == 'eWindow', 'dial_mods: no eWindow'
+        w0, l0 = I.get_param(self.T_win, 'width'), I.get_param(self.T_win, 'length')
+        lo0, hi0 = I.get_param(self.T_win, 'minExtents'), I.get_param(self.T_win, 'maxExtents')
+        assert all(abs(a - b) < 1e-6 for a, b in zip(lo0[:2] + hi0[:2], (-w0 / 2, -l0 / 2, w0 / 2, l0 / 2))), (lo0, hi0)
+        assert not self.T_win['geoms'].items and not self.T_win['anims'].items
 
     def _base(self, tmpl, name, pos, rot=None, scale=(1, 1, 1), hidden=False):
         if name in self.names:
@@ -404,8 +526,31 @@ class Scene:
         o['children'].items.extend(c for c in children if c is not None)
         return o
 
-    def null(self, name, x=0.0, y=0.0, hidden=False, scale=1.0):
-        return self._base(self.T_null, name, (KT * x, -KT * y, 0.0), None, (scale, scale, 1.0), hidden)
+    def null(self, name, x=0.0, y=0.0, hidden=False, scale=1.0, z=0.0):
+        return self._base(self.T_null, name, (KT * x, -KT * y, z), None, (scale, scale, 1.0), hidden)
+
+    def anim_null(self, name):
+        """a null at its parent's origin, moved by its own clip CAP/<name>?context=animation that a UIXA plays: a
+        clone of the cap's animated null with its anims entry renamed (the halo's anim null form, halo_native
+        Scene.null(anim=True)). Clip keys are the null's absolute local transform, so it sits at (0, 0, 0)."""
+        o = self._base(self.T_anim, name, (0.0, 0.0, 0.0))
+        entry = I.clone_node(self.T_anim['anims'].items[0])
+        entry.set('asset', Val('stri', f'{CAP}/{name}?context=animation'))
+        o.set('anims', Arr([entry], self.T_anim['anims'].tag))
+        self.anims.append(name)
+        return o
+
+    def window(self, name, x0, y0, x1, y1):
+        """a clip window over the HUD rect (x0, y0)-(x1, y1) of its parent's frame: a clone of dial_mods' window
+        (the halo's battery and capsule windows), centred on the rect at z CLIP_Z. Its children are in its own frame
+        (relative to the rect's centre), as in the halo's windows."""
+        w, l = KT * (x1 - x0), KT * (y1 - y0)
+        o = self._base(self.T_win, name, (KT * (x0 + x1) / 2, -KT * (y0 + y1) / 2, CLIP_Z))
+        H._param(o, 'width', float(w), 'fp32')
+        H._param(o, 'length', float(l), 'fp32')
+        H._param(o, 'minExtents', [-w / 2, -l / 2, -0.0, 0.0], 'vec3')
+        H._param(o, 'maxExtents', [w / 2, l / 2, -0.0, 0.0], 'vec3')
+        return o
 
     def quad(self, name, mat, x0, y0, x1, y1, layer, hidden=False):
         """A quad over the HUD rect (x0, y0)-(x1, y1) of its parent's frame, showing material binding `mat`."""
@@ -466,6 +611,8 @@ class Tower:
 
     def __init__(self, B, meta, preview, debug_dropzone=False, mode='game'):
         self.B, self.G, self.sp = B, meta['G'], meta['sprites']
+        # the Detail cell's places gained / lost count in the triangles' colours (tower.js P.up, P.down)
+        self.det_hex = {k: '#%sff' % meta['P'][k].lstrip('#').lower() for k in ('up', 'down')}
         self.pv_on, self.pv_text = preview
         self.recs = []
         self.trecs = []      # the Time Trial board's recs: the HUD template only, never the replay screen's
@@ -483,9 +630,12 @@ class Tower:
         """preview: is an element shown by vis (negated: by not vis) in the preview state"""
         return not vis or bool(self.pv_on.get(vis, False)) != neg
 
-    def bind(self, el, vis=None, neg=False, text=None):
+    def bind(self, el, vis=None, neg=False, text=None, colour=None):
         if self.game:
-            self.recs.append({'el': el, 'vis': (vis, neg) if vis else None, 'text': text})
+            rec = {'el': el, 'vis': (vis, neg) if vis else None, 'text': text}
+            if colour:
+                rec['tcol'] = colour    # a static colourOverride on the text's label
+            self.recs.append(rec)
 
     def bind_texture(self, el, db, tag, sub=LOGO_QUAD, default=None):
         """textureOverride on the unit's quad `sub` inside eXRef `el` (game mode only): the stock pill's badge binding,
@@ -566,7 +716,7 @@ class Tower:
         return o
 
     def text(self, name, x, base, cap, style, halign, box_hud, text, wrapping='clampwidth', textcase='upper',
-             vis=None, neg=False):
+             vis=None, neg=False, colour=None):
         """eText `name` in a holder null at (x, baseline); the holder's scale sets the cap height (the game's texts
         are never scaled themselves). The eText origin is the alignment anchor and the baseline (measured in game).
         Preview: only if the preview state shows it, its text recorded for the .uipre."""
@@ -577,7 +727,7 @@ class Tower:
         holder = self.B.null(self.n(name) + '_n', x, base, scale=sc)
         t = self.B.text(self.n(name), style, halign, KT * box_hud / sc, wrapping, textcase,
                         hidden=self.hidden(vis, neg))
-        self.bind(self.n(name), vis, neg, text)
+        self.bind(self.n(name), vis, neg, text, colour)
         if not self.game and text:
             if text[0] == '=':
                 self.pv_texts.append((self.n(name), text[1], text[2]))
@@ -634,56 +784,99 @@ class Tower:
             clk = self.text('tt_clk', Jt + S['gapT'] * p / 2, base, S['clock']['cap'] * p, 'OSD_26_bold', 'left',
                             2.2 * p, (CLOCK_STR, 'stri'), wrapping='none')
             self.B.kids(top, self.B.kids(timed, self.B.kids(tc, lab, clk)))
-        # status blocks under the band (shown only with the header): one at a time, in the DLL's order (leaves v3,
-        # `hs`): chequered > red > SC > VSC > yellow. Bools only (D5: no int32 binding); nested nulls give the AND:
-        # tt_nchq (not chequered) holds red, SC, VSC (the DLL never sets two of them) and, inside tt_nsc / tt_nvsc /
-        # tt_nred, the yellow block. Two row slots each, chequered one; the rows below move down by the stacker.
-        H_ = G['sep'] + G['band']
-        sc = G['status']['sc']
-        fbox = (sc['fx0'] * p, sc['fy0'] * p, (sc['fx1'] - sc['fx0']) * p, (sc['fy1'] - sc['fy0']) * p)
-        chq = self.shown_null('tt_chq', 0.0, H_, vis=leaf('chq'))
-        if chq is not None:
-            self.B.kids(top, self.B.kids(chq, self.sprite('tt_chq_bg', 'chq', layer=LAYER['bg'])))
-        under = []
-        red = self.shown_null('tt_red', 0.0, H_, vis=leaf('red'))
-        if red is not None:
-            under.append(self.B.kids(red, self.sprite('tt_red_bg', 'red', layer=LAYER['bg'])))
-        for key, sprite in (('sc', 'sc'), ('vsc', 'vsc')):
-            blk = self.shown_null(f'tt_{key}', 0.0, H_, vis=leaf(key))
-            if blk is not None:
-                self.B.kids(blk, self.sprite(f'tt_{key}_bg', sprite, layer=LAYER['bg']),
-                            self.fit(f'tt_{key}_fia', 'g_fia_k', GAME_SIZE['g_fia_k'], fbox, LAYER['mark']))
-                under.append(blk)
-        yel = self.yellow(H_)
+        # the flag cards (cards()): the HUD editor's copy holds them here, under the band, and the stacker
+        # moves the rows below them; the live tower holds them in the clipped body with the rows (build(), body())
+        if not self.game:
+            self.B.kids(top, *[c for c in self.cards(G['sep'] + G['band']) if c is not None])
+        return top
+
+    def card(self, key, pfx, y, vis, text=None):
+        """the flag card `key` (chq, red, sc, vsc, yel): a null pfx + key at (0, y) shown by vis, its parts named pfx +
+        part. The cards: pfx 'tt_' (the live tower's names; the HUD editor's copy 'tp_'); the exit's copies: 'tt_gh_'.
+        text: the yellow line's (sectors, no sector) leaves, default the card's own (ysec, ysna)"""
+        if key == 'yel':
+            return self.yellow(y, pfx, vis, *(text or (leaf('ysec'), leaf('ysna'))))
+        blk = self.shown_null(f'{pfx}{key}', 0.0, y, vis=vis)
+        if blk is None:
+            return None
+        parts = [self.sprite(f'{pfx}{key}_bg', key, layer=LAYER['bg'])]
+        if key in ('sc', 'vsc'):
+            # the VSC block is 2.50 p (the broadcast reference; its sprite's bounds move the rows down), its FIA badge
+            # moved down by vscDy so it stays centred as in the SC box
+            p, sc = self.G['p'], self.G['status']['sc']
+            dy = sc.get('vscDy', 0.0) * p if key == 'vsc' else 0.0
+            box = (sc['fx0'] * p, sc['fy0'] * p + dy, (sc['fx1'] - sc['fx0']) * p, (sc['fy1'] - sc['fy0']) * p)
+            parts.append(self.fit(f'{pfx}{key}_fia', 'g_fia_k', GAME_SIZE['g_fia_k'], box, LAYER['mark']))
+        return self.B.kids(blk, *parts)
+
+    def cards(self, y):
+        """the status blocks under the band (shown only with the header), each at y: one at a time, in the DLL's order
+        (leaves v3, `hs`): chequered > red > SC > VSC > yellow. Bools only (D5: no int32 binding); nested nulls give
+        the AND: tt_nchq (not chequered) holds red, SC, VSC (the DLL never sets two of them) and, inside tt_nsc /
+        tt_nvsc / tt_nred, the yellow block. Two row slots each (VSC 2.5), chequered one; the rows below
+        move down by the stacker. -> [tt_chq, tt_nchq], None where the preview state shows none"""
+        chq = self.card('chq', 'tt_', y, leaf('chq'))
+        under = [b for b in (self.card(k, 'tt_', y, leaf(k)) for k in ('red', 'sc', 'vsc')) if b is not None]
+        yel = self.card('yel', 'tt_', y, leaf('yel'))
         if yel is not None:
             for key in ('red', 'vsc', 'sc'):                      # innermost first
                 yel = self.B.kids(self.shown_null(f'tt_n{key}', vis=leaf(key), neg=True), yel)
             under.append(yel)
-        if under:
-            self.B.kids(top, self.B.kids(self.shown_null('tt_nchq', vis=leaf('chq'), neg=True), *under))
-        return top
+        return [chq, self.B.kids(self.shown_null('tt_nchq', vis=leaf('chq'), neg=True), *under) if under else None]
 
-    def yellow(self, y):
+    def yellow(self, y, pfx='tt_', vis=None, ysec=None, ysna=None):
         """the yellow flag block (tower.js drawStatus 'yellow'): the baked YELLOW FLAG bar and dark band (sprite yel),
         and on the band the game's word (YEL_LABEL, localised) and the flagged sectors (hud_tt_ysec: "2", "1 3"), or
         the dim bar while a yellow zone has no sector (ysna). Game text styles (white): the drawing's yellow line text
-        needs a colour no stock template sets on a label without a binding."""
-        blk = self.shown_null('tt_yel', 0.0, y, vis=leaf('yel'))
+        needs a colour no stock template sets on a label without a binding. pfx, vis and the line's leaves serve
+        the exit's copy (tt_gh_yel: hud_tt_gh_ysec / gh_ysna, the line as the card showed it when it went)."""
+        vis, ysec, ysna = vis or leaf('yel'), ysec or leaf('ysec'), ysna or leaf('ysna')
+        blk = self.shown_null(f'{pfx}yel', 0.0, y, vis=vis)
         if blk is None:
             return None
         G, p, W = self.G, self.G['p'], self.G['w']
         cap = G['status']['hazCap'] * p
         base = p + G['mid'] + cap / 2
         em = cap / CAP_EM
-        line = self.B.centre(self.n('tt_ysl'), W / 2, 0.0)
-        stk = self.B.stacker(self.n('tt_ys_stk'), -YEL_TYPICAL_EM * em / 2, base, 'l', 0.28 * em)
-        word = self.text('tt_ysw', 0.0, 0.0, cap, 'OSD_24_regular', 'left', 4.0 * p, ('=', YEL_LABEL, True))
-        num = self.text('tt_ysn', 0.0, 0.0, cap, 'OSD_26_bold', 'left', 1.6 * p, (leaf('ysec'), 'stri'),
-                        vis=leaf('ysna'), neg=True)
-        na = self.quad('tt_ysna', 'na', (0.0, -cap / 2 - 0.03 * p, 0.36 * p, -cap / 2 + 0.03 * p), LAYER['mark'],
-                       vis=leaf('ysna'))
+        line = self.B.centre(self.n(f'{pfx}ysl'), W / 2, 0.0)
+        stk = self.B.stacker(self.n(f'{pfx}ys_stk'), -YEL_TYPICAL_EM * em / 2, base, 'l', 0.28 * em)
+        word = self.text(f'{pfx}ysw', 0.0, 0.0, cap, 'OSD_24_regular', 'left', 4.0 * p, ('=', YEL_LABEL, True))
+        num = self.text(f'{pfx}ysn', 0.0, 0.0, cap, 'OSD_26_bold', 'left', 1.6 * p, (ysec, 'stri'), vis=ysna, neg=True)
+        na = self.quad(f'{pfx}ysna', 'na', (0.0, -cap / 2 - 0.03 * p, 0.36 * p, -cap / 2 + 0.03 * p), LAYER['mark'],
+                       vis=ysna)
         self.B.kids(stk, word, num, na)
-        return self.B.kids(blk, self.sprite('tt_yel_bg', 'yel', layer=LAYER['bg']), self.B.kids(line, stk))
+        return self.B.kids(blk, self.sprite(f'{pfx}yel_bg', 'yel', layer=LAYER['bg']), self.B.kids(line, stk))
+
+    def ghosts(self):
+        """the live tower: the exit's copies, tt_gh_<card> for every card, each its card's height above the cards'
+        top (in the body: where the card was while the body starts down, rolling up under the band as it eases to
+        rest), shown by hud_tt_gh_<card> (the DLL: only with its kout code, for at most 0.85 s). The yellow copy's line
+        reads hud_tt_gh_ysec / gh_ysna, the sectors as the card showed them when it went, never the live ones. In
+        tt_ghost, shown with the header as the cards."""
+        g = self.shown_null('tt_ghost', vis=leaf('hdr'))
+        for key in CARDS:
+            h = self.sp[key]['y1'] - self.sp[key]['y0']
+            self.B.kids(g, self.card(key, 'tt_gh_', -h, leaf(f'gh_{key}'),
+                                      (leaf('gh_ysec'), leaf('gh_ysna')) if key == 'yel' else None))
+        return g
+
+    def body(self, cards, rows, ghost):
+        """the live tower: tt_clipn (in tt_stack after tt_top: the band's bottom edge, or the top with the header
+        off) > tt_clip (the clip window, from that edge down past the rows and their marks) > tt_clipo (back at
+        tt_clipn's origin) > tt_xin > tt_xout (the body's anim nulls) > [tt_ghost,
+        tt_bstk (stacker: tt_cards, tt_rows)]: the copies first, so a copy draws before the rows (layer, then scene
+        order) as its card does. self.clip: the window's HUD rect in tt_clipn's frame"""
+        G, p, W = self.G, self.G['p'], self.G['w']
+        x0, x1 = -CLIP_LEFT * p, W + CLIP_RIGHT * p
+        L = (max(BODY_PITCHES.values()) + NROWS + CLIP_BOTTOM) * p
+        self.clip = (x0, 0.0, x1, L)
+        k = self.B.kids
+        clipn = self.null('tt_clipn', 0.0, G['sep'] + G['band'])     # stored where the stacker puts it (header)
+        win = self.B.window('tt_clip', x0, 0.0, x1, L)
+        back = self.B.null('tt_clipo', -(x0 + x1) / 2, -L / 2, z=-CLIP_Z)
+        xin, xout = self.B.anim_null('tt_xin'), self.B.anim_null('tt_xout')
+        bstk = self.B.stacker('tt_bstk', 0.0, 0.0, 't', 0.0)
+        return k(clipn, k(win, k(back, k(xin, k(xout, ghost, k(bstk, cards, rows))))))
 
     def row(self, i):
         G, p, W = self.G, self.G['p'], self.G['w']
@@ -698,16 +891,36 @@ class Tower:
           self.quad(r + '_b', 'panel', (G['strip'], 0.0, W, p), LAYER['bg']))
         if i:
             k(row, self.quad(r + '_sl', 'sep', (0.0, -G['stripSepH'] / 2, G['strip'], G['stripSepH'] / 2), LAYER['hl']))
-        k(row, self.quad(r + '_me', 'me', (0.0, 0.0, W, p), LAYER['hl'], vis=L('me')))
+        # the knockout hatch: the whole position strip while rNN_ko (Q1, Q2, SQ1, SQ2: a car below the last
+        # position that goes through); P1 is never in the zone, so the red box is untouched
+        k(row, self.quad(r + '_ko', 'ko', (0.0, 0.0, G['strip'], p), LAYER['ko'], vis=L('ko')))
+        # everything that belongs to the car rides in two anim nulls at the row's origin
+        # (tt_rNN_mu > tt_rNN_md) that slide it in from the car's old row; the strip, the panel, the separator, the
+        # knockout hatch and the debug line stay outside, still. The arrows sit in their own entry nulls inside (au, ad).
+        # Live tower only: the HUD editor's copy never moves. The elements keep their order (and layers) as without animations.
+        mv = row
+        if self.game:
+            mv = self.B.anim_null(r + '_md')
+            k(row, k(self.B.anim_null(r + '_mu'), mv))
+        k(mv, self.quad(r + '_me', 'me', (0.0, 0.0, W, p), LAYER['hl'], vis=L('me')))
         b = G['p1']
-        k(row, self.quad(r + '_p1', 'p1', (b['x'], b['y'], b['x'] + b['w'], b['y'] + b['h']), LAYER['p1'], vis=L('p1')))
-        k(row, self.sprite(r + '_up', 'up', vis=L('up')), self.sprite(r + '_dn', 'dn', vis=L('dn')))
-        # the position number: hidden while an arrow shows (nested groups give AND)
+        p1 = self.quad(r + '_p1', 'p1', (b['x'], b['y'], b['x'] + b['w'], b['y'] + b['h']), LAYER['p1'], vis=L('p1'))
+        up, dn = self.sprite(r + '_up', 'up', vis=L('up')), self.sprite(r + '_dn', 'dn', vis=L('dn'))
+        if self.game:
+            k(mv, k(self.B.anim_null(r + '_au'), up), k(self.B.anim_null(r + '_ad'), dn))
+        else:
+            k(mv, up, dn)
+        # the position number and P1's red box: hidden while an arrow shows (nested groups give AND). The
+        # broadcast drops the leader's box while the new leader's arrow shows (broadcast reference); an earlier build drew the green arrow
+        # on the red box. The box keeps its layer (under the number), the nulls only add the AND.
         pa = self.shown_null(r + '_pa', vis=L('up'), neg=True)
         pb = self.shown_null(r + '_pb', vis=L('dn'), neg=True)
         if pa is not None and pb is not None:
-            k(row, k(pa, k(pb, self.text(r + '_pos', G['posX'], mid + G['posCap'] / 2, G['posCap'], 'OSD_19_regular',
-                                         'centre', 0.9 * G['strip'], (L('pos'), 'stri'), wrapping='none'))))
+            k(mv, k(pa, k(pb, p1, self.text(r + '_pos', G['posX'], mid + G['posCap'] / 2, G['posCap'],
+                                             'OSD_19_regular', 'centre', 0.9 * G['strip'], (L('pos'), 'stri'),
+                                             wrapping='none'))))
+        else:
+            k(mv, p1)
         # the team logo (round 3): the stock logo unit, shown while teamcol and rNN_bdg (nested nulls give the AND;
         # either leaf false or absent: the slot is empty), its quad textured from rNN_badge exactly as the stock pill
         # textures it from team_badge_texture. The game's square badge is fitted to the measured slot's height
@@ -719,7 +932,7 @@ class Tower:
         if lt is not None and lb is not None:
             assert BADGE_TAG, 'build_tower.py sets BADGE_TAG from the stock pill (stock_badge_tag)'
             el = self.n(r + '_lg')
-            k(row, k(lt, k(lb, self.B.logo(el, G['barBadgeX'], mid, G['badgeH']))))
+            k(mv, k(lt, k(lb, self.B.logo(el, G['barBadgeX'], mid, G['badgeH']))))
             self.bind_texture(el, L('badge'), BADGE_TAG)
         # the driver code: the game's own per-car text, one per vehicle id, shown by rNN_cVV, boxed to CODE_BOX. Live
         # tower (round 4): each car's code sits in a null 'rNN_vVV' that holds rNN_cVV, with that car's team-colour bar
@@ -751,11 +964,12 @@ class Tower:
             q = self.B.quad(f'{r}_b{v:02d}', 'bar', *bar_rect, LAYER['bar'])
             self.bind_colour(f'{r}_b{v:02d}', NUB.format(v=v), 'rgba')
             k(holder, k(car, t, q))
-        k(row, holder)
+        k(mv, holder)
         # gap / interval: race and timed cells differ; the dim bar while unavailable. Every gap text box stops
         # GAP_CLEAR short of the code box (fix round 1). Race: P1's 'Interval' / 'Leader' and a retired row's 'Out' /
         # 'DSQ' / 'NC' at the drawing's label size (rNN_p1, rNN_out); every other race text at the number size
-        # ('+2 LAPS' too: no leaf tells it apart). Timed: label and number sizes are the same.
+        # ('+2 LAPS' too: no leaf tells it apart). Timed: label and number sizes are the same; lap times at
+        # LAP_CAP_T.
         code_end = G['codeX'] + code_box
         gap = (L('gap'), 'stri')
         for key, lay, vis in (('gr', 'race', leaf('race')), ('gt', 'timed', leaf('timed'))):
@@ -768,18 +982,60 @@ class Tower:
                 lc = G['labelCap']['race']
                 qa = self.shown_null(f'{r}_{key}a', vis=L('p1'), neg=True)
                 qb = self.shown_null(f'{r}_{key}b', vis=L('out'), neg=True)
+                lap = LAP_CAP * p
                 if qa is not None and qb is not None:
-                    k(g, k(qa, k(qb, self.text(f'{r}_{key}x', rx, mid + num['cap'] / 2, num['cap'], 'OSD_24_regular',
-                                               'right', box, gap, textcase='mixed'))))
+                    gx = self.text(f'{r}_{key}x', rx, mid + num['cap'] / 2, num['cap'], 'OSD_24_regular', 'right', box,
+                                   gap, textcase='mixed')
+                    if self.game:
+                        # while the column holds lap times (leaf laps, the spectator's Gap Fastest Lap) the
+                        # text at LAP_CAP, so a lap time fits the box unsqueezed; gaps keep the number size
+                        k(g, k(qa, k(qb, k(self.shown_null(f'{r}_{key}n', vis=leaf('laps'), neg=True), gx),
+                                         k(self.shown_null(f'{r}_{key}m', vis=leaf('laps')),
+                                           self.text(f'{r}_{key}xl', rx, mid + lap / 2, lap, 'OSD_24_regular', 'right',
+                                                     box, gap, textcase='mixed')))))
+                    else:
+                        k(g, k(qa, k(qb, gx)))
                 for sfx, v in (('l', L('p1')), ('o', L('out'))):
-                    k(g, self.text(f'{r}_{key}{sfx}', rx, mid + lc / 2, lc, 'OSD_24_regular', 'right', box, gap,
-                                   textcase='mixed', vis=v))
+                    t = self.text(f'{r}_{key}{sfx}', rx, mid + lc / 2, lc, 'OSD_24_regular', 'right', box, gap,
+                                  textcase='mixed', vis=v)
+                    if sfx == 'l' and self.game:
+                        # docs/spectator-ui.md 10.4: while the gap column holds lap times (leaf laps, the
+                        # spectator's Gap Fastest Lap) P1's time at the size of every other row's (LAP_CAP)
+                        ql = self.shown_null(f'{r}_{key}q', vis=leaf('laps'), neg=True)
+                        qt = self.shown_null(f'{r}_{key}t', vis=leaf('laps'))
+                        k(g, k(ql, t), k(qt, self.text(f'{r}_{key}lt', rx, mid + lap / 2, lap, 'OSD_24_regular',
+                                                       'right', box, gap, textcase='mixed', vis=L('p1'))))
+                    else:
+                        k(g, t)
             else:
-                k(g, self.text(f'{r}_{key}x', rx, mid + num['cap'] / 2, num['cap'], 'OSD_24_regular', 'right', box,
-                               gap, textcase='mixed'))
+                # the lap time flash (leaves.md v8): while rNN_pb (a personal best) or rNN_ob (the session's
+                # best) the DLL writes the car's new lap time into rNN_gap; a green or purple copy of the text shows
+                # it and the white text hides (nested nulls give the AND).
+                # every lap time at LAP_CAP_T, so "1:06.506" fits the box unsqueezed: P1's best lap (rNN_p1),
+                # the flash's new lap and, with the spectator's Gap Fastest Lap (leaf flap), every row's (three
+                # decimals); the gaps ("+0.029") and the other rows' words keep the number size
+                lt = LAP_CAP_T * p
+                fa = self.shown_null(f'{r}_{key}f', vis=L('pb'), neg=True)
+                fb = self.shown_null(f'{r}_{key}h', vis=L('ob'), neg=True)
+                if fa is not None and fb is not None:
+                    nf = self.shown_null(f'{r}_{key}n', vis=leaf('flap'), neg=True)
+                    if nf is not None:
+                        na = self.shown_null(f'{r}_{key}a', vis=L('p1'), neg=True)
+                        if na is not None:
+                            k(nf, k(na, self.text(f'{r}_{key}x', rx, mid + num['cap'] / 2, num['cap'],
+                                                  'OSD_24_regular', 'right', box, gap, textcase='mixed')))
+                        k(nf, self.text(f'{r}_{key}xp', rx, mid + lt / 2, lt, 'OSD_24_regular', 'right', box, gap,
+                                        textcase='mixed', vis=L('p1')))
+                        k(fb, nf)
+                    k(fb, self.text(f'{r}_{key}xl', rx, mid + lt / 2, lt, 'OSD_24_regular', 'right', box, gap,
+                                    textcase='mixed', vis=leaf('flap')))
+                    k(g, k(fa, fb))
+                for sfx in ('pb', 'ob'):
+                    k(g, self.text(f'{r}_{key}{sfx}', rx, mid + lt / 2, lt, 'OSD_24_regular', 'right', box, gap,
+                                   textcase='mixed', vis=L(sfx), colour=FLASH_HEX[sfx]))
             k(g, self.quad(f'{r}_{key}na', 'na', (rx - 0.36 * p, mid - 0.03 * p, rx, mid + 0.03 * p),
                            LAYER['mark'], vis=L('gna')))
-            k(row, g)
+            k(mv, g)
         # tyre: one baked letter per compound (tyre colours), the dim bar while unavailable
         ty = self.shown_null(r + '_ty', vis=leaf('tyres'))
         if ty is not None:
@@ -787,27 +1043,79 @@ class Tower:
                 k(ty, self.sprite(f'{r}_t{c}', 'ty_' + c, vis=L('t' + c)))
             k(ty, self.quad(r + '_tna', 'na', (G['tyreX'] - 0.12 * p, mid - 0.03 * p, G['tyreX'] + 0.12 * p,
                                                mid + 0.03 * p), LAYER['mark'], vis=L('tna')))
-            k(row, ty)
+            # the spectator's Detail cell (docs/spectator-ui.md 10.4; detail()): the text the DLL writes
+            # for the game's spectator menu's Detail, "" otherwise (nothing drawn)
+            if self.game:
+                self.detail(ty, r, L)
+            k(mv, ty)
         # side boxes right of the panel: '!' penalty first, then 'P' (pit lane) in the next slot
         sd = G['side']
         top = mid + sd['dy'] - sd['h'] / 2
         slot = lambda j: W + j * (sd['w'] + sd['gap'])   # noqa: E731
-        k(row, self.sprite(r + '_pen', 'pen', slot(0), top, vis=L('pen')))
+        k(mv, self.sprite(r + '_pen', 'pen', slot(0), top, vis=L('pen')))
         q0 = self.shown_null(r + '_q0', vis=L('pen'), neg=True)
         q1 = self.shown_null(r + '_q1', vis=L('pen'))
         if q0 is not None:
-            k(row, k(q0, self.sprite(r + '_pit0', 'pit', slot(0), top, vis=L('pit'))))
+            k(mv, k(q0, self.sprite(r + '_pit0', 'pit', slot(0), top, vis=L('pit'))))
         if q1 is not None:
-            k(row, k(q1, self.sprite(r + '_pit1', 'pit', slot(1), top, vis=L('pit'))))
+            k(mv, k(q1, self.sprite(r + '_pit1', 'pit', slot(1), top, vis=L('pit'))))
+        # the race's fastest lap (rNN_fl): a purple box with a stopwatch in the next free side slot, after the
+        # '!' and the 'P' (nested nulls pick the slot: neither, one of them, both)
+        for j, (npen, npit, s) in enumerate(((True, True, 0), (False, True, 1), (True, False, 1), (False, False, 2))):
+            fa = self.shown_null(f'{r}_f{j}a', vis=L('pen'), neg=npen)
+            fb = self.shown_null(f'{r}_f{j}b', vis=L('pit'), neg=npit)
+            if fa is not None and fb is not None:
+                k(mv, k(fa, k(fb, self.quad(f'{r}_fl{j}', 'fl', (slot(s), top, slot(s) + sd['w'], top + sd['h']),
+                                             LAYER['mark'], vis=L('fl')))))
         # retired / DNF / DSQ / NC: the row at about 50 % (a half-opaque layer in the row's colours over it)
         out = self.shown_null(r + '_out', vis=L('out'))
         if out is not None:
             k(out, self.quad(r + '_os', 'dims', (0.0, 0.0, G['strip'], p), LAYER['dim']),
               self.quad(r + '_op', 'dimp', (G['strip'], 0.0, W, p), LAYER['dim']))
-            k(row, out)
+            k(mv, out)
         if self.game:
             k(row, self.debug(i))
         return row
+
+    def detail(self, ty, r, L):
+        """The spectator's Detail cell in the tyre cell `ty` (live tower only; leaves.md v10, rNN_det, rNN_dup,
+        rNN_ddn): Penalties "5s", "10s", "DT", "SG"; Position Change the places gained or lost since the grid ("3") or
+        "-"; Stops the game's count or "-"; "" otherwise. Sizes and fit: DET_CAP's comment.
+        - races (tt_rNN_dr, shown while race): the white text centred on the tyre letter while neither rNN_dup nor
+          rNN_ddn (nested nulls give the AND); while one of them, a green (P.up) or red (P.down) triangle and the
+          count in the same colour as one group: an eCentre on the tyre letter over a left-to-right stacker (the
+          header's lap line and the yellow block's pattern, both seen in game). The stacker starts where a one-digit
+          group would be centred, in case the eCentre keeps its children in place;
+        - timed sessions (tt_rNN_dm, shown while timed): the white text at DET_CAP_T, centred in their cell."""
+        G, p, W, mid = self.G, self.G['p'], self.G['w'], self.G['mid']
+        k = self.B.kids
+        tx, rr, rt = G['tyreX'], G['num']['race']['r'], G['num']['timed']['r']
+        det = (L('det'), 'stri')
+        rc = self.shown_null(r + '_dr', vis=leaf('race'))
+        cap = DET_CAP * p
+        box = 2.0 * (min(tx - rr, W - tx) - DET_CLEAR * p)
+        wa = self.shown_null(r + '_dwa', vis=L('dup'), neg=True)
+        wb = self.shown_null(r + '_dwb', vis=L('ddn'), neg=True)
+        k(rc, k(wa, k(wb, self.text(r + '_dt', tx, mid + cap / 2, cap, 'OSD_24_regular', 'centre', box, det,
+                                    textcase='mixed'))))
+        aw, ah = DET_ARROW[0] * p, DET_ARROW[1] * p
+        one = aw + DET_GAP * p + DIGIT_CAPS * cap          # a one-digit group's width
+        for key, sprite, col in (('dup', 'pcu', self.det_hex['up']), ('ddn', 'pcd', self.det_hex['down'])):
+            s = self.sp[sprite]
+            assert abs((s['x1'] - s['x0']) - aw) < 0.02 and abs((s['y1'] - s['y0']) - ah) < 0.02, (sprite, s, aw, ah)
+            grp = self.shown_null(f'{r}_{key}', vis=L(key))
+            line = self.B.centre(self.n(f'{r}_{key}c'), tx, 0.0)
+            stk = self.B.stacker(self.n(f'{r}_{key}s'), -one / 2, mid + cap / 2, 'l', DET_GAP * p)
+            k(stk, self.quad(f'{r}_{key}a', sprite, (0.0, -cap / 2 - ah / 2, aw, -cap / 2 + ah / 2), LAYER['mark']),
+              self.text(f'{r}_{key}t', 0.0, 0.0, cap, 'OSD_24_regular', 'left', 3.0 * DIGIT_CAPS * cap, det,
+                        textcase='mixed', colour=col))
+            k(rc, k(grp, k(line, stk)))
+        k(ty, rc)
+        tm = self.shown_null(r + '_dm', vis=leaf('timed'))
+        capt = DET_CAP_T * p
+        k(tm, self.text(r + '_dtt', (rt + W) / 2, mid + capt / 2, capt, 'OSD_24_regular', 'centre',
+                        (W - rt) - 2.0 * DET_CLEAR * p, det, textcase='mixed'))
+        k(ty, tm)
 
     def debug(self, i):
         """Validation-log view (leaf dbg) under the last shown row (fix round 1; it was above the tower, over the
@@ -926,14 +1234,23 @@ class Tower:
     def build(self):
         """game: the root null tt_root (hidden by default; the template shows it in tt_host), with the standings
         (tt_stack) and the Time Trial board (tt_trial). preview: tp_root, the HUD editor's copy (shown by default;
-        static template nodes hide it in game)."""
+        static template nodes hide it in game). The live tower's cards and rows: the clipped body (body());
+        the HUD editor's copy keeps the older tree (the cards in the header, the rows under it)."""
         G = self.G
         root = self.B.null(ROOT if self.game else PV_ROOT, hidden=self.game)
         stack = self.B.stacker(self.n('tt_stack'), 0.0, 0.0, 't', 0.0)
-        rows = self.null('tt_rows', 0.0, G['sep'] + G['band'])     # stored where the stacker puts it (header, no block)
+        if not self.game:
+            rows = self.null('tt_rows', 0.0, G['sep'] + G['band'])     # stored where the stacker puts it (header, no block)
+            self.B.kids(rows, *[self.row(i) for i in range(NROWS)])
+            self.B.kids(stack, self.header(), rows)
+            return self.B.kids(root, stack)
+        rows = self.null('tt_rows')                                     # stored where tt_bstk puts it (no card)
         self.B.kids(rows, *[self.row(i) for i in range(NROWS)])
-        self.B.kids(stack, self.header(), rows)
-        return self.B.kids(root, stack, self.trial() if self.game else None)
+        top = self.header()
+        cards = self.shown_null('tt_cards', vis=leaf('hdr'))
+        self.B.kids(cards, *[c for c in self.cards(0.0) if c is not None])
+        self.B.kids(stack, top, self.body(cards, rows, self.ghosts()))
+        return self.B.kids(root, stack, self.trial())
 
 
 GAME_SIZE = {}   # game texture pixel sizes, filled by build_tower.py from the game's own surfaces
@@ -974,10 +1291,11 @@ def _ids_and_check(idf, entry, stock_ids, new_names):
 
 
 def build_cap(cap_bytes, dial_bytes, lapc_bytes, stacked_bytes, embs, meta, row_bytes, logo_bytes, cat_bytes,
-              debug_dropzone=False):
-    """the bottom cap scene with the live tower (tt_root) and the HUD editor's copy (tp_root)
-    -> (bytes, live Tower, preview Tower)"""
-    B = Scene(cap_bytes, dial_bytes, lapc_bytes, stacked_bytes, embs, row_bytes, logo_bytes, cat_bytes)
+              debug_dropzone=False, mods_bytes=None):
+    """the bottom cap scene with the live tower (tt_root) and the HUD editor's copy (tp_root); mods_bytes: dial_mods.idf
+    (the clip window's model) -> (bytes, live Tower, preview Tower)"""
+    assert mods_bytes is not None, 'build_cap needs dial_mods.idf (the clip window)'
+    B = Scene(cap_bytes, dial_bytes, lapc_bytes, stacked_bytes, embs, row_bytes, logo_bytes, cat_bytes, mods_bytes)
     stock_ids = {e.path: e.element_id for e, _ in B.idf.scenes[0].root.walk()}
     T = Tower(B, meta, preview_state(), debug_dropzone)
     B.root['children'].items.append(T.build())
@@ -987,6 +1305,12 @@ def build_cap(cap_bytes, dial_bytes, lapc_bytes, stacked_bytes, embs, meta, row_
     assert not any(nm.startswith('tp_') for rec in T.recs + T.trecs for nm in [rec['el']]), 'the editor copy is never bound'
     _ids_and_check(B.idf, B.entry, stock_ids, B.names)
     walked = [e for e, _ in I.Idf(B.idf.to_bytes()).scenes[0].root.walk()]
+    # every element built is in the written scene (an element dropped from the tree stops the build). The only
+    # exception, as without animations: in the editor copy, a fastest-lap slot's null pair where the preview state creates one
+    # half (tp_rNN_fJa / fJb, empty) and the pair is left out
+    lost = sorted(B.names - {e.name for e in walked})
+    assert not [nm for nm in lost if not re.fullmatch(r'tp_r\d\d_f\d[ab]', nm)], ('built elements missing from the '
+                                                                                    'scene', len(lost), lost[:5])
     tnames = {e.name for e in walked if e.path == f'{ROOT}.{TRIAL_ROOT}' or e.path.startswith(f'{ROOT}.{TRIAL_ROOT}.')}
     assert not any(rec['el'] in tnames for rec in T.recs), 'a Time Trial element among the standings recs'
     assert all(rec['el'] in tnames for rec in T.trecs), 'a Time Trial rec outside tt_trial'
@@ -1005,7 +1329,116 @@ def build_cap(cap_bytes, dial_bytes, lapc_bytes, stacked_bytes, embs, meta, row_
     assert len(tl) == 1 and len(tg) == len(tc) == NPILLS and len(trial) == 1 + 2 * NPILLS, ('Time Trial references', len(trial))
     assert tl[0].file_ref == CAT_LOGO and all(e.file_ref == LOGO for e in tg + tc), 'Time Trial reference files'
     assert tl[0].path == f'{ROOT}.{TRIAL_ROOT}.tt_tstack.tt_ttop.{TRIAL_SERIES_EL}', ('Time Trial series logo', tl[0].path)
+    T.body_info = check_body(B, T)
     return B.idf.to_bytes(), T, PV
+
+
+def check_body(B, T):
+    """the live tower's body as built, at rest. The tree: tt_stack holds tt_top and
+    tt_clipn; tt_clipn > tt_clip (eWindow) > tt_clipo > tt_xin > tt_xout (anim nulls, nothing else on the way) >
+    tt_ghost, then tt_bstk (tt_cards, tt_rows). The window's rect from tt_clipn's origin down, tt_clipo back at that origin (z
+    too). Every drawn part of the cards and rows inside the window (rows under the tallest card too), nothing above its
+    top edge; each card from that edge down, its height its size's BODY_PITCHES (the clips' start offsets); each copy the
+    card's parts one card height higher, part by part, with the copy's own leaves only. HUD units, y down.
+    -> info for tower_info.json"""
+    p, KT_ = T.G['p'], KT
+    root = H._find(B.root, ROOT)
+    els = {}
+
+    def walk(o, x, y, z, s, path):
+        nm, pos, sc = I._val(o.get('name')), o['position'].value, o['scale'].value
+        ax, ay, az = x + s * pos[0], y + s * pos[1], z + pos[2]
+        els[nm] = {'o': o, 'path': path + [nm], 'x': ax, 'y': ay, 'z': az, 's': s, 'sc': sc,
+                   'type': I._val(o.get('typeName')), 'kids': [I._val(c.get('name')) for c in o['children'].items]}
+        for c in o['children'].items:
+            walk(c, ax, ay, az, s * sc[0], path + [nm])
+    walk(root, 0.0, 0.0, 0.0, 1.0, [])
+    want = {'tt_stack': ['tt_top', 'tt_clipn'], 'tt_clipn': ['tt_clip'], 'tt_clip': ['tt_clipo'], 'tt_clipo': ['tt_xin'],
+            'tt_xin': ['tt_xout'], 'tt_xout': ['tt_ghost', 'tt_bstk'], 'tt_bstk': ['tt_cards', 'tt_rows']}
+    for nm, kids in want.items():
+        assert els[nm]['kids'] == kids, ('body tree', nm, els[nm]['kids'])
+    assert els['tt_clip']['type'] == 'eWindow' and els['tt_bstk']['type'] == 'eStacker'
+    assert I.get_param(els['tt_bstk']['o'], 'stackerType') == 't' and abs(I.get_param(els['tt_bstk']['o'], 'gap')) < 1e-12
+    for nm in ('tt_xin', 'tt_xout'):
+        an = els[nm]['o']['anims'].items
+        assert nm in B.anims and len(an) == 1 and an[0]['asset'].value == f'{CAP}/{nm}?context=animation', nm
+        assert els[nm]['o']['position'].value[:3] == [0.0, 0.0, 0.0] and list(els[nm]['sc'][:3]) == [1.0, 1.0, 1.0]
+    o0 = els['tt_clipn']
+
+    def hud(e, dx=0.0, dy=0.0):                    # scene point -> HUD units from tt_clipn's origin (y down)
+        return (e['x'] + dx - o0['x']) / KT_, -(e['y'] + dy - o0['y']) / KT_
+    w, l = I.get_param(els['tt_clip']['o'], 'width'), I.get_param(els['tt_clip']['o'], 'length')
+    cx, cy = hud(els['tt_clip'])
+    rect = (cx - w / 2 / KT_, cy - l / 2 / KT_, cx + w / 2 / KT_, cy + l / 2 / KT_)
+    assert all(abs(a - b) < 1e-4 for a, b in zip(rect, T.clip)) and abs(rect[1]) < 1e-4, (rect, T.clip)
+    bx, by = hud(els['tt_clipo'])
+    assert abs(bx) < 1e-9 and abs(by) < 1e-9 and abs(els['tt_clipo']['z'] - o0['z']) < 1e-12, ('tt_clipo', bx, by)
+
+    def parts(top):                                # every drawn part under element `top`: (name, kind, rect / anchor)
+        out = []
+        for nm, e in els.items():
+            if top not in e['path'][:-1]:
+                continue
+            o = e['o']
+            if e['type'] == 'eNull' and o['geoms'].items:
+                qw, qh = B.mesh_w * e['sc'][0] * e['s'], B.mesh_h * e['sc'][2] * e['s']
+                qx, qy = hud(e)
+                out.append((nm, 'quad', (qx - qw / 2 / KT_, qy - qh / 2 / KT_, qx + qw / 2 / KT_, qy + qh / 2 / KT_),
+                            o['geoms'].items[0]['materialid'].value, I.get_param(o, 'eLayer.layer')))
+            elif e['type'] == 'eXRef':
+                ss = e['s'] * e['sc'][0]
+                qx, qy = hud(e, ss * B.logo_c[0], ss * B.logo_c[1])
+                h2 = ss * B.logo_side / 2 / KT_
+                out.append((nm, 'logo', (qx - h2, qy - h2, qx + h2, qy + h2), None, None))
+            elif e['type'] == 'eText':
+                qx, qy = hud(e)
+                out.append((nm, 'text', (qx, qy, qx, qy), tuple(I.get_param(o, k) for k in (
+                    'style', 'halign', 'boxWidth', 'wrapping', 'textcase')), e['s']))
+        return out
+    m = 0.5 * p
+    drawn = parts('tt_bstk')
+    rows = [d for d in drawn if 'tt_rows' in els[d[0]]['path']]
+    cards = [d for d in drawn if 'tt_cards' in els[d[0]]['path']]
+    assert len(rows) + len(cards) == len(drawn) and rows and cards
+    tallest = max(BODY_PITCHES.values()) * p
+    row_names = {d[0] for d in rows}
+    for nm, kind, r, *_ in drawn:
+        low = r[3] + (tallest if nm in row_names else 0.0)
+        assert rect[0] + m <= r[0] and r[2] <= rect[2] - m and r[1] >= -1e-6 and low <= rect[3] - m, \
+            ('a part outside the clip window', nm, [round(v, 3) for v in r], [round(v, 3) for v in rect])
+    # the cards from the window's top edge down, each as high as its size says; the copies part by part
+    heights, ncopy = {}, 0
+    for key in CARDS:
+        mine = [d for d in cards if f'tt_{key}' in els[d[0]]['path']]
+        q = [d for d in mine if d[1] == 'quad']
+        top_, bot = min(d[2][1] for d in q), max(d[2][3] for d in q)
+        h = T.sp[key]['y1'] - T.sp[key]['y0']
+        assert abs(top_) < 1e-6 and abs(bot - h) < 1e-6, ('card extent', key, top_, bot, h)
+        assert abs(h / p - BODY_PITCHES[CARD_SIZE[key]]) < 1e-9, ('card height vs its clip', key, h / p)
+        assert all(-1e-6 <= d[2][1] and d[2][3] <= h + 1e-6 for d in mine), ('card part outside its card', key)
+        heights[key] = h / p
+        copy = {d[0]: d for d in parts(f'tt_gh_{key}')}
+        assert len(copy) == len(mine), ('copy parts', key, len(copy), len(mine))
+        for nm, kind, r, a, b in mine:
+            g = copy[nm.replace('tt_', 'tt_gh_', 1)]
+            assert g[1] == kind and g[3] == a and g[4] == b, ('copy part differs', nm)
+            assert all(abs(gv - (rv - (h if j % 2 else 0.0))) < 1e-6 for j, (gv, rv) in enumerate(zip(g[2], r))), \
+                ('copy part not one card height up', nm, g[2], r)
+            ncopy += 1
+    # bindings: the copies read only the copy leaves; hidden in the scene until the template shows them
+    gh = {r['el']: r for r in T.recs if r['el'].startswith('tt_gh_') or r['el'] == 'tt_ghost'}
+    copy_leaves = {leaf(f'gh_{k}') for k in CARDS} | {leaf('gh_ysec'), leaf('gh_ysna'), leaf('hdr')}
+    for el, r in gh.items():
+        dbs = ([r['vis'][0]] if r['vis'] else []) + ([r['text'][0]] if r['text'] and r['text'][0] != '=' else [])
+        assert set(dbs) <= copy_leaves, ('a copy binds a live leaf', el, dbs)
+    for key in CARDS:
+        assert gh[f'tt_gh_{key}']['vis'] == (leaf(f'gh_{key}'), False) and B.hidden[f'tt_gh_{key}'], key
+    assert gh['tt_gh_ysn']['text'] == (leaf('gh_ysec'), 'stri') and gh['tt_gh_ysn']['vis'] == (leaf('gh_ysna'), True)
+    assert gh['tt_gh_ysna']['vis'] == (leaf('gh_ysna'), False) and gh['tt_ghost']['vis'] == (leaf('hdr'), False)
+    cr = [r for r in T.recs if r['el'] == 'tt_cards']
+    assert len(cr) == 1 and cr[0]['vis'] == (leaf('hdr'), False) and not B.hidden['tt_cards']
+    return {'window_p': [round(v / p, 4) for v in rect], 'card_heights_p': heights, 'copy_parts': ncopy,
+            'drawn_parts': len(drawn), 'rows_bottom_p': round(max(d[2][3] for d in rows) / p, 4)}
 
 
 def build_stacked(stacked_bytes):
@@ -1157,42 +1590,181 @@ def stock_series_tag(stock_ui_bytes):
     return pr['value'].type
 
 
+def lap_counter_visible():
+    """visible <- NOT hud_tt_show: hidden while the standings or the Time Trial board show, whose header
+    carries the lap line; true while the leaf is absent, so the counter is the game's own whenever the tower is off or
+    the DLL is missing"""
+    return H._bool_prop(True, leaf('show'), True)
+
+
 def lap_counter_nodes():
-    """hud_lap_counter: one group 'tt_lapc' whose children hide LAPC_HIDE while hud_tt_show is true (the standings or
-    the Time Trial board, whose header carries the lap line; visible = NOT show; true while the leaf is
-    absent, so the counter is the game's own whenever the tower is off or the DLL is missing)"""
-    kids = [U.node('v_tt_lapc_' + el, 'UIGP', [('visible', H._bool_prop(True, leaf('show'), True))], layout=[el],
-                   behav=U.GROUP_BEHAVIOURS) for el in LAPC_HIDE]
+    """hud_lap_counter: one group 'tt_lapc' whose children hide LAPC_HIDE and the panel's wrappers: elements no
+    stock node targets"""
+    kids = [U.node('v_tt_lapc_' + el, 'UIGP', [('visible', lap_counter_visible())], layout=[el],
+                   behav=U.GROUP_BEHAVIOURS) for el in LAPC_HIDE + tuple(LAPC_WRAPPER + p for p in LAPC_WRAP)]
     return U.node('tt_lapc', 'UIGP', [], kids=kids, behav=U.GROUP_BEHAVIOURS)
 
 
-def check_lap_counter(lapc_bytes, stock_ui_bytes):
-    """The lap counter parts the tower hides must be the stock scene's own, shown by default, and never shown or
-    hidden by a stock node (a second visible binding on one element would fight the game's)."""
+def build_lapc_scene(lapc_bytes):
+    """the lap counter scene with each LAPC_WRAP part in a new null of its own (LAPC_WRAPPER + part) at the
+    part's place in Scene Root's children (order kept), at the origin (positions kept). Every stock element keeps its
+    name, so the stock template nodes still find their parts (nodeidlookup holds name hashes); element ids follow the
+    stock rule (djb2 of the dotted path): unchanged for every element outside a wrapper."""
     idf = I.Idf(lapc_bytes)
-    top = [I._val(c.get('name')) for c in idf.scenes[0].entry['scene']['children'].items]
-    assert sorted(top) == sorted(LAPC_STOCK_KIDS), ('lap counter scene changed', top)
-    els = {e.name: e for e, _ in idf.scenes[0].root.walk()}
-    for nm in LAPC_HIDE:
-        assert nm in els, ('no lap counter element', nm)
-        assert not I.get_param(els[nm].obj, 'isHidden'), ('hidden by default', nm)
-        assert sum(1 for x in els if x == nm) == 1
-    names = [e.name for e, _ in idf.scenes[0].root.walk()]
-    assert all(names.count(nm) == 1 for nm in LAPC_HIDE), 'a hidden part name is not unique'
-    p = Pkg(stock_ui_bytes)
-    root = H._node_at(p.root, LAPC_TEMPLATE)
-    fights = []
+    entry = idf.scenes[0].entry
+    root = entry['scene']
+    assert idf.scenes[0].name == I.component_id(LAPC), 'not the stock lap counter scene'
+    stock_ids = {e.path: e.element_id for e, _ in idf.scenes[0].root.walk()}
+    kids = root['children'].items
+    model = [c for c in kids if I._val(c.get('name')) == 'holder_formation']
+    assert len(model) == 1 and not model[0]['geoms'].items, 'lap counter: no plain holder null to copy'
+    for part in LAPC_WRAP:
+        at = [i for i, c in enumerate(kids) if I._val(c.get('name')) == part]
+        assert len(at) == 1, ('lap counter: panel part not a single child of Scene Root', part)
+        name = LAPC_WRAPPER + part
+        assert H._find(root, name) is None, ('lap counter: wrapper exists', name)
+        w = I.clone_node(model[0])
+        w.set('name', Val('stri', name))
+        H._param(w, 'guid', H._guid(name))
+        w.set('position', H._vec((0.0, 0.0, 0.0)))
+        w.set('scale', H._vec((1.0, 1.0, 1.0)))
+        w.set('rotation', Val('quat', [-0.0, -0.0, 0.0, -1.0]))
+        for key in ('children', 'anims', 'geoms'):
+            if w.get(key) is not None:
+                w.set(key, Arr([], w[key].tag))
+        pa = w['params']
+        pa.items = [it for it in pa.items if I._val(it.get('name')) not in ('isHidden', 'eAnimationGroup.AnimGroup')]
+        w['children'].items.append(kids[at[0]])
+        kids[at[0]] = w
+    ids = []
+    for kid in root['children'].items:
+        I.recompute_ids(kid, I._val(kid.get('name')), ids)
+    I.relookup(entry)
+    out = idf.to_bytes()
+    back = I.Idf(out).scenes[0]
+    after = {e.path: e.element_id for e, _ in back.root.walk()}
+    kept = {k: v for k, v in stock_ids.items() if k.split('.')[0] not in LAPC_WRAP}
+    assert all(after.get(k) == v for k, v in kept.items()), 'lap counter: a stock element id changed'
+    assert len(set(ids)) == len(ids), 'lap counter: elementId collision'
+    names = [e.name for e, _ in back.root.walk()]
+    stock_names = [e.name for e, _ in I.Idf(lapc_bytes).scenes[0].root.walk()]
+    assert sorted(names) == sorted(stock_names + [LAPC_WRAPPER + p for p in LAPC_WRAP]), 'lap counter: names'
+    return out
+
+
+def _drawn_outside(idf, hidden):
+    """the elements that draw (a mesh, a text, a referenced unit) and lie in none of `hidden`"""
+    trail, loose = [], []
+    for e, d in idf.scenes[0].root.walk():
+        del trail[d:]
+        trail.append(e.name)
+        g = e.obj.get('geoms')
+        draws = (g is not None and len(g.items) > 0) or e.type in ('eText', 'eXRef')
+        if draws and not hidden & set(trail):
+            loose.append(e.name)
+    return loose
+
+
+def _stock_targets(root, els):
+    """{element name: [stock nodes whose layout chain ends there]} below a template node. A chain through an eXRef of
+    the scene (logo: car_category_logo > logo_icon) targets an element of the referenced unit, not one of these."""
+    targets = {}
 
     def walk(n):
         for path in n.items[N.LAYOUT].items:
-            last = path.items[-1]['debugName'].value if path.items else ''
-            if last in LAPC_HIDE and n.items[N.PROPS].get('visible') is not None:
-                fights.append((N.name(n), last))
+            chain = [b['debugName'].value for b in path.items]
+            if not chain or chain == ['Scene Root']:
+                continue
+            assert chain[0] in els, ('a stock chain outside the scene', N.name(n), chain)
+            if len(chain) > 1 and els[chain[0]].type == 'eXRef':
+                continue
+            assert all(c in els for c in chain), ('a stock chain outside the scene', N.name(n), chain)
+            targets.setdefault(chain[-1], []).append(n)
         for c in N.children(n):
             walk(c)
     walk(root)
-    assert not fights, ('stock nodes show or hide these lap counter parts', fights)
-    return len(LAPC_HIDE)
+    return targets
+
+
+def check_lap_counter(lapc_bytes, built_bytes, stock_ui_bytes):
+    """The lap counter parts the tower hides (the wrapper rule): in the built scene every part that draws (a mesh, a text, a
+    referenced unit) lies in a hidden element (LAPC_HIDE or a wrapper); no stock node targets a hidden element; each
+    hidden element is unique and shown by default; every stock node's target still resolves to one element of its
+    name (each panel part is still a stock node's target). -> (stock parts hidden, wrappers)"""
+    idf = I.Idf(lapc_bytes)
+    top = [I._val(c.get('name')) for c in idf.scenes[0].entry['scene']['children'].items]
+    assert sorted(top) == sorted(LAPC_STOCK_KIDS), ('lap counter scene changed', top)
+    built = I.Idf(built_bytes)
+    wrappers = [LAPC_WRAPPER + p_ for p_ in LAPC_WRAP]
+    hidden = set(LAPC_HIDE) | set(wrappers)
+    assert len(hidden) == len(LAPC_HIDE) + len(LAPC_WRAP), 'a part hidden twice'
+    names = [e.name for e, _ in built.scenes[0].root.walk()]
+    els = {e.name: e for e, _ in built.scenes[0].root.walk()}
+    assert all(names.count(nm) == 1 for nm in names), 'lap counter: an element name is not unique'
+    for nm in hidden:
+        assert names.count(nm) == 1, ('lap counter part missing or not unique', nm)
+        assert not I.get_param(els[nm].obj, 'isHidden'), ('hidden by default', nm)
+    for p_ in LAPC_WRAP:
+        w = els[LAPC_WRAPPER + p_]
+        assert [c.name for c in w.children] == [p_], ('wrapper holds exactly its part', p_)
+        assert list(w.obj['position'].value[:3]) == [0.0, 0.0, 0.0], ('wrapper not at the origin', p_)
+    loose = _drawn_outside(built, hidden)
+    assert not loose, ('lap counter parts that draw while the tower shows', loose)
+    root = H._node_at(Pkg(stock_ui_bytes).root, LAPC_TEMPLATE)
+    targets = _stock_targets(root, els)
+    shared = [(part, [N.name(n) for n in targets[part]]) for part in sorted(hidden) if part in targets]
+    assert not shared, ('stock nodes target these lap counter parts: a tower node there would not hold', shared)
+    for part in LAPC_WRAP:
+        assert part in targets, ('lap counter panel part: no stock node targets it any more', part)
+    return len(LAPC_HIDE), len(LAPC_WRAP)
+
+
+def flag_message_node(visible=None):
+    """one group 'tt_flagm' under a flag message's message node (whose layout is the flag message scene's root) with
+    one child that hides FLAGM_PART: in hud_left_notification_dynamic while hud_tt_show; visible: another
+    switch (the spectator screen's own flag message, while hud_tt_on)"""
+    kid = U.node('v_tt_flagm_' + FLAGM_PART, 'UIGP',
+                 [('visible', lap_counter_visible() if visible is None else visible)], layout=[FLAGM_PART],
+                 behav=U.GROUP_BEHAVIOURS)
+    return U.node(FLAGM_NODE, 'UIGP', [], kids=[kid], behav=U.GROUP_BEHAVIOURS)
+
+
+def flag_scene_check(scene_bytes):
+    """the stock flag message scene: FLAGM_PART unique, shown by default, the holder of everything the scene draws.
+    -> elements it holds that draw"""
+    idf = I.Idf(scene_bytes)
+    assert idf.scenes[0].name == I.component_id(FLAGM_SCENE), 'not the stock flag message scene'
+    names = [e.name for e, _ in idf.scenes[0].root.walk()]
+    els = {e.name: e for e, _ in idf.scenes[0].root.walk()}
+    assert names.count(FLAGM_PART) == 1, ('flag message: part missing or not unique', FLAGM_PART)
+    assert not I.get_param(els[FLAGM_PART].obj, 'isHidden'), 'flag message part hidden by default'
+    loose = _drawn_outside(idf, {FLAGM_PART})
+    assert not loose, ('flag message parts outside', FLAGM_PART, loose)
+    return len(_drawn_outside(idf, set()))
+
+
+def check_flag_message(scene_bytes, stock_ui_bytes):
+    """FLAGM_PART: unique in the flag message scene, shown by default, the holder of everything the scene draws, the
+    target of no stock node of the element; the message node targets the scene's root. -> elements it holds that draw"""
+    drawn = flag_scene_check(scene_bytes)
+    p = Pkg(stock_ui_bytes)
+    msg = H._node_at(p.root, FLAGM_TEMPLATE)
+    assert H._type(msg) == 'F1HM', ('flag message node type', H._type(msg))
+    lay = [[b['debugName'].value for b in g.items] for g in msg.items[N.LAYOUT].items]
+    assert lay == [['Scene Root']], ('flag message node layout', lay)
+    top = H._node_at(p.root, FLAGM_TEMPLATE.split('.')[0])
+    hits = []
+
+    def walk(n):
+        for path in n.items[N.LAYOUT].items:
+            chain = [b['debugName'].value for b in path.items]
+            if FLAGM_PART in chain:
+                hits.append((N.name(n), chain))
+        for c in N.children(n):
+            walk(c)
+    walk(top)
+    assert not hits, ('stock nodes target the flag message part', hits)
+    return drawn
 
 
 def tower_nodes(T, stock, badge_tag, root_visible=None, series=None):
@@ -1247,6 +1819,8 @@ def tower_nodes(T, stock, badge_tag, root_visible=None, series=None):
             if tag == 'laps':       # the game's total laps: the stock lap counter's own binding type
                 (tag,) = stock[LAPS]
             props.append(('text', U.prop(tag, _default(tag), db)))
+        if rec.get('tcol'):
+            props.append(('colourOverride', U.prop('rgba', rec['tcol'])))   # static, as the stock
         nodes.append(U.node('t_' + el, 'UILB', props, layout=[el], behav=U.LABEL_BEHAVIOURS))
     return nodes
 
@@ -1356,6 +1930,8 @@ def trial_nodes(T, stock, base, series_tag):
             db, tag = text
             tag = _stock_tag(db, tag, stock)
             props.append(('text', U.prop(tag, _default(tag), db)))
+        if rec.get('tcol'):
+            props.append(('colourOverride', U.prop('rgba', rec['tcol'])))   # static, as the stock
         nodes.append(U.node('t_' + el, 'UILB', props, layout=[el], behav=U.LABEL_BEHAVIOURS))
     decisions, trig, untrig = [], [], []
     for rel, ev in switches.items():
@@ -1368,6 +1944,283 @@ def trial_nodes(T, stock, base, series_tag):
     return nodes, decisions, [U.command('trigger', trig), U.command('untrigger', untrig)], switches
 
 
+def anim_nodes(T, base):
+    """the animations' template nodes for the tower under tt_ctl `base`, the same in the
+    HUD, replay and spectator templates:
+    - under tt_host_n, per row: a UIXA per anim null (tt_xa_rNN_<null>: signal-driven like the stock rival-state
+      players, no props) and a UIMO per faded text (tt_mo_rNN_<text>: the stock fade-in's props on FADE_CURVE;
+      overrideComplete -> its own deactivateOverride, as stock);
+    - under tt_ctl, per row: an MVCD per code leaf (tt_an_rNN_<code>, leaves.md v12) with one event, '1': its motion.
+      xuK / xdK put the other slide null at rest and play the null's K-row segment (goToFraction(a) +
+      playToFraction(b)); xeu / xed play the arrow entry; xnf fades the number in, xff the flash copies; xrs puts the row
+      at rest (every clip at fraction 1, every fade off). No '0' event: a code going false sends nothing. No trigger
+      and no query between decisions: each decision fires on its own leaf (a registered decision fires when hud::set
+      writes its leaf: rows moved by themselves [game]), and no two decisions of one packet touch the same node,
+      so their order does not matter.
+    - tt_ctl's trigger registers and queries every code decision (at rest every code is false: the query sends
+      nothing), untrigger unregisters them.
+    -> (host nodes, decision nodes, trigger signals, untrigger signals, info)"""
+    host = f'{base}.tt_host_n'
+    xa_behav = ('NBFC', 'NBXA', 'NBEL', 'NBDC', 'NBMG', 'NBVM', 'NBAN', 'NBAC', 'NBOS', 'NBMO')   # stock UIXA
+    mo_behav = ('NBEL', 'NBMG', 'NBOS', 'NBXA')                                                   # stock UIMO
+    curve = U.djb2(ANIM_CURVE)
+    want = {f'tt_r{i:02d}_{nm}' for i in range(NROWS) for nm in ANIM_NULLS} | {f'tt_{nm}' for nm in BODY_NULLS}
+    assert set(T.B.anims) == want and len(T.B.anims) == len(want), 'the scene\'s anim nulls'
+    hosted, decisions, trig, untrig, leaves, nsig = [], [], [], [], [], 0
+    for i in range(NROWS):
+        r = f'r{i:02d}'
+        xa = {nm: f'{host}.tt_xa_{r}_{nm}' for nm in ANIM_NULLS}
+        mo = {t: f'{host}.tt_mo_{r}_{t}' for t in ANIM_FADES}
+        for nm in ANIM_NULLS:
+            hosted.append(U.node(f'tt_xa_{r}_{nm}', 'UIXA', [], layout=[f'tt_{r}_{nm}'], behav=xa_behav))
+        for t in ANIM_FADES:
+            assert f'tt_{r}_{t}' in T.B.names, ('a faded text is not in the scene', r, t)
+            hosted.append(U.node(f'tt_mo_{r}_{t}', 'UIMO', [
+                ('Cascade', U.prop('bool', True)), ('ParameterName', U.prop('stri', 'Alpha')),
+                ('BlendType', U.prop('stri', 'Multiplicative')), ('Value', U.prop('fp32', 1.0)),
+                ('StartingValue', U.prop('fp32', 0.0)), ('AnimationCurve', U.prop('stri', FADE_CURVE))],
+                events=[U.event('overrideComplete', [U.sig(mo[t], 'deactivateOverride', 'overrideComplete')])],
+                layout=[f'tt_{r}_{t}'], behav=mo_behav))
+
+        def go(nm, f):
+            return U.sig(xa[nm], 'goToFraction', '1', {'value': float(f)})
+
+        def play(nm, f):
+            return U.sig(xa[nm], 'playToFraction', '1', {'curveName': curve, 'value': float(f)})
+
+        def fade(t, on):
+            if on:
+                return U.sig(mo[t], 'activateOverride', '1', {'overrideInstant': False})
+            return U.sig(mo[t], 'deactivateOverride', '1')
+
+        sigs = {'xrs': [go(nm, 1.0) for nm in ANIM_NULLS] + [fade(t, False) for t in ANIM_FADES],
+                'xeu': [go('au', ANIM_ENTRY[0]), play('au', ANIM_ENTRY[1])],
+                'xed': [go('ad', ANIM_ENTRY[0]), play('ad', ANIM_ENTRY[1])],
+                'xnf': [fade('pos', True)], 'xff': [fade('gtpb', True), fade('gtob', True)]}
+        for key, nm, other in (('u', 'mu', 'md'), ('d', 'md', 'mu')):
+            for k, (a, b) in ANIM_SEGS.items():
+                sigs[f'x{key}{k}'] = [go(other, 1.0), go(nm, a), play(nm, b)]
+        assert sorted(sigs) == sorted(ANIM_CODES)
+        # the codes one packet can hold (a slide, its entry, the fades; xrs always alone) touch no node twice
+        for slide in [c for c in ANIM_CODES if c[1] in 'ud' and c[2] in '123']:
+            seen = {}
+            for c in (slide, 'xeu' if slide[1] == 'u' else 'xed', 'xnf', 'xff'):
+                for sg in sigs[c]:
+                    to = sg['to_object_name'].value
+                    assert seen.setdefault(to, c) == c, ('two codes of one packet touch', to, seen[to], c)
+        for c in ANIM_CODES:
+            an = f'tt_an_{r}_{c}'
+            decisions.append(U.node(an, 'MVCD', [('dbEntry', U.prop('stri', leaf(f'{r}_{c}')))],
+                                    events=[U.event('1', sigs[c])]))
+            leaves.append(leaf(f'{r}_{c}'))
+            trig += [U.sig(f'{base}.{an}', 'register', 'trigger'), U.sig(f'{base}.{an}', 'query', 'trigger')]
+            untrig.append(U.sig(f'{base}.{an}', 'unregister', 'untrigger'))
+        nsig += sum(len(sg) for sg in sigs.values()) + len(ANIM_FADES)
+    # the header's card motion: a UIXA per body null (tt_xa_xin, tt_xa_xout), and per
+    # header code (leaves.md v13) an MVCD tt_an_<code> with one event '1': kinK puts tt_xout at rest and plays tt_xin's
+    # segment K (the card's height up, eased to rest), koutK the same on tt_xout (the card's height down), krs puts both
+    # at rest. One code a packet, so no two decisions of one packet touch one node.
+    hx = {nm: f'{host}.tt_xa_{nm}' for nm in BODY_NULLS}
+    for nm in BODY_NULLS:
+        hosted.append(U.node(f'tt_xa_{nm}', 'UIXA', [], layout=[f'tt_{nm}'], behav=xa_behav))
+
+    def hgo(nm, f):
+        return U.sig(hx[nm], 'goToFraction', '1', {'value': float(f)})
+
+    def hplay(nm, f):
+        return U.sig(hx[nm], 'playToFraction', '1', {'curveName': curve, 'value': float(f)})
+
+    hsigs = {'krs': [hgo(nm, 1.0) for nm in BODY_NULLS]}
+    for k, (a, b) in ANIM_SEGS.items():
+        hsigs[f'kin{k}'] = [hgo('xout', 1.0), hgo('xin', a), hplay('xin', b)]
+        hsigs[f'kout{k}'] = [hgo('xin', 1.0), hgo('xout', a), hplay('xout', b)]
+    assert sorted(hsigs) == sorted(HEAD_CODES)
+    for c in HEAD_CODES:
+        an = f'tt_an_{c}'
+        decisions.append(U.node(an, 'MVCD', [('dbEntry', U.prop('stri', leaf(c)))], events=[U.event('1', hsigs[c])]))
+        leaves.append(leaf(c))
+        trig += [U.sig(f'{base}.{an}', 'register', 'trigger'), U.sig(f'{base}.{an}', 'query', 'trigger')]
+        untrig.append(U.sig(f'{base}.{an}', 'unregister', 'untrigger'))
+    nsig += sum(len(sg) for sg in hsigs.values())
+    info = {'host_nodes': len(hosted), 'decisions': len(decisions), 'signals': nsig, 'trigger': len(trig),
+            'untrigger': len(untrig), 'leaves': leaves}
+    return hosted, decisions, trig, untrig, info
+
+
+def check_anim_leaves(leaves, contract):
+    """every leaf the animation decisions read is a bool of the contract (leaves.md v12), each read once;
+    and the header's codes too (v13)"""
+    bad = [db for db in leaves if contract.get(db) != 'bool']
+    if bad:
+        raise SystemExit(f'animation decisions read leaves that are not contract bools: {bad[:6]}')
+    assert len(leaves) == len(set(leaves)) == NROWS * len(ANIM_CODES) + len(HEAD_CODES), len(leaves)
+
+
+def djb2(s):
+    h = 5381
+    for c in s.encode():
+        h = (h * 33 + c) & 0xffffffff
+    return h
+
+
+VM_NAME = re.compile(rb'#?(view_model_data|ui_menu_data)\.([A-Za-z0-9_]+)')
+
+
+def check_vm_hashes(ours, blobs):
+    """the game keys view-model nodes by the djb2 hash of their name (Swofty re/db/subsystems/vm.md), so two
+    names under one parent with one hash are one node: a write to either is a write to both (v11's rNN_st, rNN_u2 and
+    rNN_tS). ours: the addon's leaf paths ('#view_model_data.hud_tt_...'); blobs: built templates and stock files whose
+    view_model_data / ui_menu_data names count too. Stops the build when a group of names with one hash holds an
+    addon name (hud_tt_ / hud_halo_). -> (names, groups of stock names alone)"""
+    names = {}
+    for db in ours:
+        parent, _, nm = db.lstrip('#').partition('.')
+        names.setdefault(parent, set()).add(nm)
+    for blob in blobs:
+        for m in VM_NAME.finditer(blob):
+            names.setdefault(m.group(1).decode(), set()).add(m.group(2).decode())
+    bad, stock_groups, total = [], 0, 0
+    for parent, nms in names.items():
+        total += len(nms)
+        by = {}
+        for nm in nms:
+            by.setdefault(djb2(nm), []).append(nm)
+        for g in by.values():
+            if len(g) < 2:
+                continue
+            if any(nm.startswith(('hud_tt_', 'hud_halo_')) for nm in g):
+                bad.append(f'{parent}: {" = ".join(sorted(g))}')
+            else:
+                stock_groups += 1
+    if bad:
+        raise SystemExit('view-model names that share a djb2 hash (one node in game):\n  ' + '\n  '.join(bad[:12]))
+    return total, stock_groups
+
+
+def check_anim_readback(got, base, info):
+    """in the built tt_ctl, every signal to an animation node (tt_xa_, tt_mo_, tt_an_) and every
+    animation decision's signal hits a node of tt_ctl by path and id; the counts as built. -> number of such signals"""
+    paths = {}
+
+    def walk(n, path):
+        paths[path] = n
+        for c in N.children(n):
+            if N.is_node(c):
+                walk(c, f'{path}.{N.name(c)}')
+    walk(got, base)
+    ours = (f'{base}.tt_host_n.tt_xa_', f'{base}.tt_host_n.tt_mo_', f'{base}.tt_an_')
+    n = 0
+    for path, node in paths.items():
+        for slot in (N.COMMANDS, N.EVENTS):
+            for c in node.items[slot].items:
+                if not isinstance(c, Obj):
+                    continue
+                for s in c['signals'].items:
+                    to = s['to_object_name'].value
+                    if to.startswith(ours) or path.startswith(ours):
+                        assert to in paths, ('animation signal without its node', path, to)
+                        assert s['to_object'].value == paths[to].items[N.PROPS]['id'].value, ('target id', to)
+                        assert s['to_pin'].value == N.djb2(s['to_pin_name'].value), ('pin id', to)
+                        n += 1
+    an = [p for p in paths if p.startswith(f'{base}.tt_an_')]
+    xa = [p for p in paths if p.startswith(ours[0])]
+    mo = [p for p in paths if p.startswith(ours[1])]
+    assert len(an) == info['decisions'] and len(xa) + len(mo) == info['host_nodes'], (len(an), len(xa), len(mo))
+    assert all(H._type(paths[p]) == 'MVCD' for p in an) and all(H._type(paths[p]) == 'UIXA' for p in xa)
+    assert all(H._type(paths[p]) == 'UIMO' for p in mo)
+    assert n == info['signals'] + info['trigger'] + info['untrigger'], (n, info)
+    # no two children of one node of tt_ctl share a name hash (a node's nameId is the djb2 of its name; v11's
+    # tt_an_rNN_st and tt_an_rNN_u2 shared one)
+    kids = {}
+    for path, node in paths.items():
+        parent = path.rsplit('.', 1)[0] if path != base else None
+        if parent is not None:
+            kids.setdefault(parent, []).append(N.name(node))
+    for parent, names in kids.items():
+        hashes = [djb2(nm) for nm in names]
+        assert len(set(hashes)) == len(hashes), ('children with one name hash', parent,
+                                                 [nm for nm in names if hashes.count(djb2(nm)) > 1][:6])
+    return n
+
+
+def hook(node, cmd, sig):
+    """append signal `sig` to stock command `cmd` of `node` (the replay and spectator screens' open and close
+    start and stop the animation decisions, beside the stock's own decision triggers)"""
+    c = [x for x in node.items[N.COMMANDS].items if isinstance(x, Obj) and x['commandName'].value == cmd]
+    assert len(c) == 1, (N.name(node), cmd, len(c))
+    to = sig['to_object_name'].value
+    assert not any(s['to_object_name'].value == to for s in c[0]['signals'].items), ('already hooked', cmd, to)
+    c[0]['signals'].items.append(sig)
+
+
+def anim_profile(t):
+    """the motion's progress at t seconds into a play (0 at 0, 1 at ANIM_PLAY): the broadcast's ease-out, an exponential
+    with time constant ANIM_TAU scaled to end exactly at ANIM_PLAY; on its extension for t < 0"""
+    return (1.0 - math.exp(-t / ANIM_TAU)) / (1.0 - math.exp(-ANIM_PLAY / ANIM_TAU))
+
+
+def anim_keys(nm, pitch):
+    """null nm's translation keys -> (fractions, y offsets in scene units, max error in row pitches). Per segment
+    (a, b) of start offset A: a rest key, a key on the profile's extension just before a, then ANIM_KEYS + 1 keys from a
+    to b at times spaced so that linear interpolation errs alike everywhere (closer where the motion bends most, at
+    the start), then a rest key just after b. The error: the keys' straight lines against the profile, sampled.
+    The body's nulls (BODY_NULLS) have the rows' segments, segment K starting BODY_PITCHES[K] pitches away."""
+    segs = list(ANIM_SEGS.items()) if nm in ('mu', 'md') + BODY_NULLS else [(1, ANIM_ENTRY)]
+    ts, vs = [0.0], [0.0]
+    err = 0.0
+    w = 1.0 - math.exp(-ANIM_PLAY / (2 * ANIM_TAU))
+    for k, (a, b) in segs:
+        amp = BODY_SIGN[nm] * BODY_PITCHES[k] if nm in BODY_NULLS else ANIM_ROWS[nm] * k
+        span = b - a
+        if ts[-1] < a - 2 * ANIM_EPS - 1e-9:
+            ts.append(a - 2 * ANIM_EPS)
+            vs.append(0.0)
+        ts.append(a - ANIM_EPS)
+        vs.append(amp * (1.0 - anim_profile(-ANIM_EPS / span * ANIM_PLAY)))
+        seg_t = [-2 * ANIM_TAU * math.log(1.0 - (j / ANIM_KEYS) * w) for j in range(ANIM_KEYS + 1)]
+        assert abs(seg_t[-1] - ANIM_PLAY) < 1e-9 and seg_t == sorted(seg_t)
+        for t in seg_t:
+            ts.append(a + span * t / ANIM_PLAY)
+            vs.append(amp * (1.0 - anim_profile(t)) if t < ANIM_PLAY - 1e-12 else 0.0)
+        for j in range(len(seg_t) - 1):
+            t0, t1 = seg_t[j], seg_t[j + 1]
+            v0, v1 = amp * (1.0 - anim_profile(t0)), amp * (1.0 - anim_profile(t1))
+            for q in range(1, 20):
+                t = t0 + (t1 - t0) * q / 20
+                err = max(err, abs(v0 + (v1 - v0) * q / 20 - amp * (1.0 - anim_profile(t))))
+        if b < 1.0:
+            ts.append(b + ANIM_EPS)
+            vs.append(0.0)
+    assert ts == sorted(ts) and len(set(ts)) == len(ts) and ts[0] == 0.0 and abs(ts[-1] - 1.0) < 1e-12, nm
+    assert vs[0] == 0.0 and vs[-1] == 0.0
+    return ts, [v * pitch for v in vs], err
+
+
+def anim_clips(tmpl_clip_bytes, strtab_bytes, names, pitch):
+    """the anim nulls' clips (translation keys from anim_keys; rotation and scale at rest: the halo's clip form,
+    halo_native._clip) and the cap scene's string table with their names appended after its own, sorted (as the
+    halo's). pitch: the row pitch in scene units. -> (string table bytes, {name: (temp, syst)}, key info)"""
+    st = Pkg(strtab_bytes)
+    strings = st.root['strings']
+    have = [v.value for v in strings.items]
+    names = sorted(names)
+    assert have == [CAP_ANIM] and names and names[0] > have[-1] and len(set(names)) == len(names), (have, names[:2])
+    for nm in names:
+        strings.items.append(Val(strings.items[0].type, nm))
+    ident, one = (0.0, 0.0, 0.0, -1.0), (1.0, 1.0, 1.0)
+    assert abs(H.ANIM_T - 1.0) < 1e-9, 'a fraction f plays the clip at f x ANIM_T: the keys assume 1.0'
+    clips, nkeys, err = {}, {}, 0.0
+    for j, nm in enumerate(names):
+        kind = nm.rsplit('_', 1)[1]
+        ts, vs, e = anim_keys(kind, pitch)
+        err = max(err, e)
+        nkeys[kind] = len(ts)
+        keys = [(0.0, v, 0.0) for v in vs]
+        clips[nm] = H._clip(tmpl_clip_bytes, nm, len(have) + j, [
+            (5, 3, 0x80, ts, keys), (2, 1, 0x84, [0.0], [ident]), (5, 2, 0x80, [0.0], [one])], CAP_STRTAB)
+    return st.to_bytes(), clips, {'keys': nkeys, 'err_rows': err}
+
+
 def clock_formatter(ui_root):
     """the session clock: the stock session timer's formatter (hud_dynamic_templates.ui), cloned as tt_clock_fmt (it
     writes time_remaining_str, which the timed header's clock text reads)"""
@@ -1376,6 +2229,59 @@ def clock_formatter(ui_root):
     clock = I.clone_node(fmt[0])
     clock.items[N.PROPS]['name'].value = 'tt_clock_fmt'
     return clock
+
+
+def rebind_clock_text(nodes, db):
+    """the HUD header's clock text (t_tt_clk) reads db instead of the relative CLOCK_STR (the replay and
+    spectator copies keep CLOCK_STR)"""
+    hits = []
+
+    def walk(n):
+        if N.is_node(n):
+            t = n.items[N.PROPS].get('text')
+            if isinstance(t, Obj) and t.get('dbentry') is not None and t['dbentry'].value == CLOCK_STR:
+                hits.append(n)
+            for c in N.children(n):
+                walk(c)
+    for n in nodes:
+        walk(n)
+    assert [N.name(h) for h in hits] == ['t_tt_clk'], [N.name(h) for h in hits]
+    hits[0].items[N.PROPS]['text']['dbentry'].value = db
+
+
+def check_clock_start(stock_ui_bytes):
+    """Each stock time_remaining_formatter receives exactly one signal: CLOCK_PIN, from an event of its timer's
+    visibility decision (the pin the clone needs). -> number of stock formatters"""
+    p = Pkg(stock_ui_bytes)
+    fmts = [path for path, _ in _find_node(p.root, 'time_remaining_formatter')]
+    assert len(fmts) >= 3 and any(f.startswith(CLOCK_MODEL + '.') for f in fmts), fmts
+    got = {f: [] for f in fmts}
+
+    def walk(x, trail):
+        if N.is_node(x):
+            t = trail + [N.name(x)]
+            for idx in (N.COMMANDS, N.EVENTS):
+                for c in x.items[idx].items:
+                    if isinstance(c, Obj):
+                        for sg in c['signals'].items:
+                            if sg['to_object_name'].value in got:
+                                got[sg['to_object_name'].value].append(('.'.join(t), sg['to_pin_name'].value,
+                                                                        sg['to_pin'].value))
+            for c in N.children(x):
+                walk(c, t)
+        elif isinstance(x, Arr):
+            for c in x.items:
+                walk(c, trail)
+        elif isinstance(x, Obj):
+            for k in x.keys():
+                walk(x[k], trail)
+    walk(p.root, [])
+    for f, sigs in got.items():
+        assert len(sigs) == 1, ('stock formatter signals', f, sigs)
+        frm, pin, pin_id = sigs[0]
+        assert pin == CLOCK_PIN and pin_id == U.djb2(CLOCK_PIN), ('stock formatter pin', f, sigs)
+        assert frm == f.rsplit('.', 1)[0] + '.visibility_decision', ('stock formatter signal source', f, frm)
+    return len(fmts)
 
 
 def build_template(ui_bytes, stock_ui_bytes, T, contract):
@@ -1400,28 +2306,63 @@ def build_template(ui_bytes, stock_ui_bytes, T, contract):
     nodes = tower_nodes(T, stock, badge_tag, series=(HUD_SERIES, series_tag))
     tnodes, decisions, cmds, switches = trial_nodes(T, stock, base, series_tag)
     check_trial_decisions(switches, tdecisions)
+    # the animations' nodes (anim_nodes); tt_ctl's trigger and untrigger (Track Position's enable and disable)
+    # start and stop their decisions with the board's
+    anim_host, anim_dec, anim_trig, anim_untrig, anim_info = anim_nodes(T, base)
+    check_anim_leaves(anim_info['leaves'], contract)
     clock = clock_formatter(p.root)
+    clock_out = leaf(CLOCK_OUT_KEY)
+    assert clock_out in contract and contract[clock_out] == 'stri', 'leaves.md: the clock leaf (text)'
+    out_prop = clock.items[N.PROPS]['database_output']
+    assert out_prop['dbentry'].value == CLOCK_STR, 'the stock formatter writes time_remaining_str'
+    out_prop['dbentry'].value = clock_out
+    rebind_clock_text(nodes, clock_out)
+    clock_mv = U.node(CLOCK_DECISION, 'MVCD', [('dbEntry', U.prop('stri', leaf('timed')))],
+                      events=[U.event('1', [U.sig(f'{base}.tt_clock_fmt', CLOCK_PIN, '1')])])
     # the standings (tt_stack) hide and the Time Trial board (tt_trial) shows while hud_tt_trial; absent: standings
     switch = [U.node('v_tt_stack', 'UIGP', [('visible', H._bool_prop(True, leaf('trial'), True))], layout=['tt_stack'],
                      behav=U.GROUP_BEHAVIOURS),
               U.node('v_' + TRIAL_ROOT, 'UIGP', [('visible', H._bool_prop(False, leaf('trial')))], layout=[TRIAL_ROOT],
                      behav=U.GROUP_BEHAVIOURS)]
-    host = U.node('tt_host_n', 'UIGP', [('visible', H._bool_prop(False, leaf('show')))], kids=nodes + switch + tnodes,
-                  layout=[HOST], behav=U.GROUP_BEHAVIOURS)
+    host = U.node('tt_host_n', 'UIGP', [('visible', H._bool_prop(False, leaf('show')))],
+                  kids=nodes + switch + tnodes + anim_host, layout=[HOST], behav=U.GROUP_BEHAVIOURS)
     mask = U.node('tt_mask', 'UIGP', [('visible', H._bool_prop(True, leaf('show'), True))], layout=[MASK],
                   behav=U.GROUP_BEHAVIOURS)
-    ctl = U.node(CTL, 'UIGP', [], kids=[mask, host, clock] + decisions, behav=U.GROUP_BEHAVIOURS)
+    ctl = U.node(CTL, 'UIGP', [], kids=[mask, host, clock] + decisions + [clock_mv] + anim_dec,
+                 behav=U.GROUP_BEHAVIOURS)
     ctl.items[N.COMMANDS].items.extend(cmds)
+    # the clock: the stock timers start their formatter with CLOCK_PIN when they turn visible; the clone gets it
+    # from tt_ctl's trigger (Track Position's enable). The header shows the clock only in timed sessions.
+    check_clock_start(stock_ui_bytes)
+    trig = [c for c in ctl.items[N.COMMANDS].items if isinstance(c, Obj) and c['commandName'].value == 'trigger']
+    assert len(trig) == 1, 'tt_ctl trigger'
+    trig[0]['signals'].items.append(U.sig(f'{base}.tt_clock_fmt', CLOCK_PIN, 'trigger'))
+    # the timed decision, registered and queried with the board's decisions, unregistered with them
+    trig[0]['signals'].items += [U.sig(f'{base}.{CLOCK_DECISION}', 'register', 'trigger'),
+                                 U.sig(f'{base}.{CLOCK_DECISION}', 'query', 'trigger')]
+    untrig = [c for c in ctl.items[N.COMMANDS].items if isinstance(c, Obj) and c['commandName'].value == 'untrigger']
+    assert len(untrig) == 1, 'tt_ctl untrigger'
+    untrig[0]['signals'].items.append(U.sig(f'{base}.{CLOCK_DECISION}', 'unregister', 'untrigger'))
+    trig[0]['signals'].items += anim_trig
+    untrig[0]['signals'].items += anim_untrig
     # the stock cap instance never shows the tower (its root is hidden by default; this makes it explicit in game)
     # nor the editor's copy (shown by default: only these static nodes hide it in game)
     cap_off = [U.hidden('tt_cap_off', ROOT), U.hidden('tp_cap_off', PV_ROOT)]
-    # the game's lap counter: hidden while the tower shows, back as the game has it while hud_tt_on is false or absent
+    # the game's lap counter: hidden while the tower shows, back as the game has it while hud_tt_show is false or
+    # absent; tower nodes on elements no stock node targets (the panel's parts through their wrappers in
+    # the lap counter scene, build_lapc_scene); the stock nodes are the game's own again (an earlier build bound visible on five)
     lapc = lap_counter_nodes()
+    lapc_node = H._node_at(p.root, LAPC_TEMPLATE)
+    assert not any(N.name(c) == N.name(lapc) for c in N.children(lapc_node)), 'lap counter already has the tower node'
+    # the game's flag message box at the lap counter's place: hidden the same way, by the element holding it
+    flagm = flag_message_node()
+    flagm_node = H._node_at(p.root, FLAGM_TEMPLATE)
+    assert not any(N.name(c) == N.name(flagm) for c in N.children(flagm_node)), 'flag message already has the tower node'
 
     # every binding's type must be the type of the value it reads: a mismatch crashes the game
     bad, out = [], []
     for node, prop, t, db in (H._bindings(ctl, []) + [b for c in cap_off for b in H._bindings(c, [])] +
-                              H._bindings(lapc, [])):
+                              H._bindings(lapc, []) + H._bindings(flagm, [])):
         want = binding_type(db, contract, stock)
         if not want:
             bad.append(f'{node}.{prop} <- {db}: type unknown (not in the contract, no stock binding, not in KNOWN_TYPES)')
@@ -1444,10 +2385,10 @@ def build_template(ui_bytes, stock_ui_bytes, T, contract):
     for c in cap_off:
         N.fix_ids(c, STOCK_CAP_NODE)
         cap_node.items[N.CHILDREN].items.append(c)
-    lapc_node = H._node_at(p.root, LAPC_TEMPLATE)
-    assert not any(N.name(c) == N.name(lapc) for c in N.children(lapc_node)), 'lap counter already has the tower node'
     N.fix_ids(lapc, LAPC_TEMPLATE)
     lapc_node.items[N.CHILDREN].items.append(lapc)
+    N.fix_ids(flagm, FLAGM_TEMPLATE)
+    flagm_node.items[N.CHILDREN].items.append(flagm)
     # read back: the board's nodes and decisions where the signals say, every signal target a node of tt_ctl
     data = p.to_bytes()
     got = H._node_at(Pkg(data).root, base)
@@ -1459,6 +2400,35 @@ def build_template(ui_bytes, stock_ui_bytes, T, contract):
             if N.is_node(c):
                 walk(c, f'{path}.{N.name(c)}')
     walk(got, base)
+    # the clock's start: one CLOCK_PIN signal on tt_ctl's trigger, to the clone's id
+    ts = [c for c in got.items[N.COMMANDS].items if isinstance(c, Obj) and c['commandName'].value == 'trigger']
+    clk = [sg for sg in ts[0]['signals'].items if sg['to_pin_name'].value == CLOCK_PIN]
+    fmt_path = f'{base}.tt_clock_fmt'
+    assert len(ts) == 1 and len(clk) == 1 and clk[0]['to_object_name'].value == fmt_path, 'clock start signal'
+    assert clk[0]['to_object'].value == paths[fmt_path].items[N.PROPS]['id'].value, 'clock start signal: target id'
+    # the clone writes hud_tt_clock, the header's clock text reads it; the timed decision starts the clone
+    fmt_id = paths[fmt_path].items[N.PROPS]['id'].value
+    assert paths[fmt_path].items[N.PROPS]['database_output']['dbentry'].value == clock_out, 'clock output'
+    texts = [n for n in paths.values() if H._type(n) == 'UILB' and isinstance(n.items[N.PROPS].get('text'), Obj)
+             and n.items[N.PROPS]['text'].get('dbentry') is not None]
+    assert [N.name(n) for n in texts if n.items[N.PROPS]['text']['dbentry'].value == clock_out] == ['t_tt_clk'], \
+        'the clock text'
+    assert not [n for n in texts if n.items[N.PROPS]['text']['dbentry'].value == CLOCK_STR], 'a relative clock text'
+    mvp = f'{base}.{CLOCK_DECISION}'
+    mv = paths[mvp]
+    assert H._type(mv) == 'MVCD' and mv.items[N.PROPS]['dbEntry']['value'].value == leaf('timed'), 'clock decision'
+    evs = [e for e in mv.items[N.EVENTS].items if isinstance(e, Obj)]
+    assert len(evs) == 1 and evs[0]['eventName'].value == '1', 'clock decision event'
+    sg = evs[0]['signals'].items
+    assert len(sg) == 1 and sg[0]['to_pin_name'].value == CLOCK_PIN and sg[0]['to_object'].value == fmt_id, \
+        'clock decision signal'
+    tsig = [(x['to_object_name'].value, x['to_pin_name'].value, x['to_object'].value) for x in ts[0]['signals'].items]
+    mv_id = mv.items[N.PROPS]['id'].value
+    assert (mvp, 'register', mv_id) in tsig and (mvp, 'query', mv_id) in tsig, 'clock decision: trigger'
+    us = [c for c in got.items[N.COMMANDS].items if isinstance(c, Obj) and c['commandName'].value == 'untrigger']
+    assert len(us) == 1 and (mvp, 'unregister', mv_id) in [(x['to_object_name'].value, x['to_pin_name'].value,
+                                                          x['to_object'].value) for x in us[0]['signals'].items], \
+        'clock decision: untrigger'
     for ev in switches.values():
         for sigs in ev.values():
             assert all(path in paths for path, _pin in sigs), 'a decision signal without its node'
@@ -1466,7 +2436,12 @@ def build_template(ui_bytes, stock_ui_bytes, T, contract):
     T.trial_info = {'nodes': len(tnodes) + len(switch), 'decisions': len(decisions),
                     'signals': sum(len(s) for ev in switches.values() for s in ev.values()),
                     'values': sorted(switches)}
-    return data, len(nodes) + len(switch) + len(tnodes) + len(decisions) + 5 + len(N.children(lapc)) + 1, out
+    # the animations' nodes and signals as built
+    anim_info['readback_signals'] = check_anim_readback(got, base, anim_info)
+    T.anim_info = {k: v for k, v in anim_info.items() if k != 'leaves'}
+    T.anim_leaves = list(anim_info['leaves'])
+    return data, (len(nodes) + len(switch) + len(tnodes) + len(decisions) + 6 + len(N.children(lapc)) + 1 +
+                  len(anim_host) + len(anim_dec)), out
 
 
 def check_trial_decisions(switches, stock):
@@ -1646,6 +2621,14 @@ def replay_binding_type(db, contract, hud, replay):
     return {KNOWN_TYPES[key]} if key in KNOWN_TYPES else None
 
 
+def trial_off():
+    """The replay and spectator screens' static node that hides the Time Trial board (tt_trial) in their bottom-cap
+    instance. A scene's isHidden does not hide an element in game (docs/spectator-ui.md 10.1), so without it the board's
+    five rows and header drew over the standings' top five rows (an in-game test: a lighter panel, a white bar, a
+    dim bar after the gap, a second FIA badge). The HUD switches it with v_tt_trial (on hud_tt_trial) instead."""
+    return U.hidden('v_' + TRIAL_ROOT, TRIAL_ROOT)
+
+
 def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
     """replays_and_highlights.ui plus the tower: under the screen root one group tt_ctl with
       tt_mask_table, tt_mask_header  driver_table>Scene Root, session_timer>Scene Root: visible <- NOT hud_tt_on
@@ -1681,7 +2664,7 @@ def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
         assert any(ch == (el,) for _p, ch in stock_vis), ('the stock board is no longer switched on its reference', el)
 
     nodes = tower_nodes(T, hud, badge_tag, root_visible=U.prop('bool', True, REPLAY_SHOW),
-                        series=(REPLAY_SERIES, series_tag))
+                        series=(REPLAY_SERIES, series_tag)) + [trial_off()]
     host = U.node('tt_host_n', 'UIGP', [('visible', H._bool_prop(False, leaf('on')))], kids=nodes, layout=[HOST],
                   behav=U.GROUP_BEHAVIOURS)
     masks = [U.node(nm, 'UIGP', [('visible', H._bool_prop(True, leaf('on'), True))], layout=[el, SCENE_ROOT],
@@ -1689,7 +2672,14 @@ def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
     sting = U.node(REPLAY_STING_NODE, 'UIGP', [('visible', H._bool_prop(True, REPLAY_STING, True))],
                    layout=[HOST, SCENE_ROOT], behav=U.GROUP_BEHAVIOURS)
     clock = clock_formatter(hud_p.root)
-    ctl = U.node(CTL, 'UIGP', [], kids=masks + [host, sting, clock], behav=U.GROUP_BEHAVIOURS)
+    # the animations (anim_nodes), started by the screen's open and stopped by its close through tt_ctl's
+    # trigger and untrigger (the HUD's: Track Position's enable and disable)
+    base = f'{REPLAY_ROOT}.{CTL}'
+    anim_host, anim_dec, anim_trig, anim_untrig, anim_info = anim_nodes(T, base)
+    check_anim_leaves(anim_info['leaves'], contract)
+    host.items[N.CHILDREN].items.extend(anim_host)
+    ctl = U.node(CTL, 'UIGP', [], kids=masks + [host, sting, clock] + anim_dec, behav=U.GROUP_BEHAVIOURS)
+    ctl.items[N.COMMANDS].items.extend([U.command('trigger', anim_trig), U.command('untrigger', anim_untrig)])
 
     # every binding's type must be the type of the value it reads: a mismatch crashes the game when the screen opens
     bad, out = [], []
@@ -1704,13 +2694,25 @@ def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
         raise SystemExit('replay tower binding types:\n  ' + '\n  '.join(bad))
     N.fix_ids(ctl, REPLAY_ROOT)
     root.items[N.CHILDREN].items.append(ctl)
+    hook(root, 'open', U.sig(base, 'trigger', 'open'))
+    hook(root, 'close', U.sig(base, 'untrigger', 'close'))
     data = p.to_bytes()
 
-    # read back: the group once under the root, its children in order, ids by path
+    # read back: the group once under the root, its children in order, ids by path; outside tt_ctl the stock .ui but
+    # for the two hook signals
     q = Pkg(data)
     got = H._node_at(q.root, f'{REPLAY_ROOT}.{CTL}')
     kids = [N.name(c) for c in N.children(got)]
-    assert kids == [nm for nm, _ in REPLAY_MASKS] + ['tt_host_n', REPLAY_STING_NODE, 'tt_clock_fmt'], kids
+    assert kids == ([nm for nm, _ in REPLAY_MASKS] + ['tt_host_n', REPLAY_STING_NODE, 'tt_clock_fmt'] +
+                    [N.name(d) for d in anim_dec]), kids
+    assert H._canon(H._strip_ours(q.root, (CTL,))) == H._canon(Pkg(ui_bytes).root), 'replay: a node outside tt_ctl changed'
+    hooks = [(cmd, s['to_object_name'].value, s['to_pin_name'].value, s['to_object'].value)
+             for cmd in ('open', 'close') for x in H._node_at(q.root, REPLAY_ROOT).items[N.COMMANDS].items
+             if isinstance(x, Obj) and x['commandName'].value == cmd for s in x['signals'].items
+             if s['to_object_name'].value == base]
+    assert hooks == [('open', base, 'trigger', got.items[N.PROPS]['id'].value),
+                     ('close', base, 'untrigger', got.items[N.PROPS]['id'].value)], hooks
+    anim_info['readback_signals'] = check_anim_readback(got, base, anim_info)
     count = 0
 
     def walk(n, path):
@@ -1724,7 +2726,8 @@ def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
     walk(got, f'{REPLAY_ROOT}.{CTL}')
     info = {'nodes': count, 'tower_nodes': len(nodes), 'bindings': len(out),
             'dll_leaves': len({db for db, _ in out if db.startswith(VM)}),
-            'stock_visible_nodes': len(stock_vis), 'replay_vm': sorted(db for db, _ in out if db.startswith(REPLAY_VM))}
+            'stock_visible_nodes': len(stock_vis), 'replay_vm': sorted(db for db, _ in out if db.startswith(REPLAY_VM)),
+            'anim': {k: v for k, v in anim_info.items() if k != 'leaves'}}
     return data, info, out
 
 
@@ -1747,6 +2750,66 @@ SPECT_SHOW = 'show_left_side'                  # the screen view model's switch 
 SPECT_SERIES = 'logo_texture'                  # the screen view model's series logo (session_display.logo binds it)
 SPECT_MASKS = (('tt_mask_table', (SPECT_PREFIX, SPECT_TABLE_EL, SPECT_GROUP)),
                ('tt_mask_header', (SPECT_PREFIX, SPECT_HEADER_EL, SCENE_ROOT)))
+# the spectator screen's own flag message. Seen in game (2026-11-11, spectating): the game's box
+# (LAP 4 / CAUTION / SECTOR 1) drew over the tower's yellow card (YELLOW FLAG / SECTOR 1). The screen scene holds its
+# own reference to the flag message scene (SPECT_FLAGM_EL, top level, at (-9.09, 4.89): on the tower's header); the
+# stock node SPECT_FLAGM (dataContext the left message queue, visible <- show_left_side) holds the message node
+# left_message [F1HM] on that scene's root, as the HUD element's does. The HUD's tower node is in the HUD template
+# (FLAGM_TEMPLATE): another .ui and another instance of the scene, so it never reached this one. The screen gets the
+# same node, hiding FLAGM_PART while hud_tt_on, the spectator tower's own switch (tt_host_n shows on it, the stock
+# board's masks hide on it): with the tower off the game's box draws as before.
+SPECT_FLAGM_EL = 'race_condition_flag_message'
+SPECT_FLAGM = SPECT_PARENT + '.left_notification'
+SPECT_FLAGM_MSG = SPECT_FLAGM + '.left_message'
+
+
+def check_spect_flag_message(scene_bytes, screen_bytes, stock_ui_bytes):
+    """the spectator screen's flag message. The screen scene references the stock flag message scene once, at
+    its top level (SPECT_FLAGM_EL, shown by default); the stock node SPECT_FLAGM targets that reference, switched by
+    SPECT_SHOW; its message node SPECT_FLAGM_MSG [F1HM] targets the scene's root; no other stock node of the screen
+    targets the reference or anything in it, and no stock node targets FLAGM_PART; FLAGM_PART holds everything the
+    scene draws (flag_scene_check). -> (elements FLAGM_PART holds that draw, stock nodes in the message node)"""
+    drawn = flag_scene_check(scene_bytes)
+    scr = I.Idf(screen_bytes)
+    assert len(scr.scenes) == 1 and scr.scenes[0].name == I.component_id(SPECT_SCREEN), 'not the stock spectator scene'
+    refs = [e for e, _ in scr.scenes[0].root.walk() if e.type == 'eXRef' and e.file_ref == FLAGM_SCENE]
+    assert len(refs) == 1, ('spectator scene: flag message references', [e.path for e in refs])
+    ref = refs[0]
+    assert ref.name == SPECT_FLAGM_EL and ref.path == SPECT_FLAGM_EL, ('spectator flag message reference', ref.path)
+    assert [e.name for e, _ in scr.scenes[0].root.walk()].count(SPECT_FLAGM_EL) == 1, 'flag message name not unique'
+    assert not I.get_param(ref.obj, 'isHidden'), 'spectator flag message hidden by default'
+    p = Pkg(stock_ui_bytes)
+    ln = H._node_at(p.root, SPECT_FLAGM)
+    assert H._type(ln) == 'UIGP' and _chains(ln) == [(SPECT_PREFIX, SPECT_FLAGM_EL)], \
+        ('spectator flag message node', H._type(ln), _chains(ln))
+    vis = ln.items[N.PROPS].get('visible')
+    neg = vis.get('dbentrynegate') if vis is not None else None
+    assert vis is not None and vis.get('dbentry') is not None and vis['dbentry'].value == SPECT_SHOW and \
+        (neg is None or neg.value is False), 'spectator flag message: not switched by ' + SPECT_SHOW
+    msg = H._node_at(p.root, SPECT_FLAGM_MSG)
+    assert H._type(msg) == 'F1HM' and _chains(msg) == [(SCENE_ROOT,)], \
+        ('spectator flag message: message node', H._type(msg), _chains(msg))
+    assert not any(N.is_node(c) and N.name(c) == FLAGM_NODE for c in N.children(msg)), 'a stock ' + FLAGM_NODE
+    others, hits = [], []
+
+    def walk(n, path, chains):
+        mine = [c + own for c in chains for own in _chains(n)] or chains
+        inside = path == SPECT_FLAGM or path.startswith(SPECT_FLAGM + '.')
+        for c in mine:
+            if c[:2] == (SPECT_PREFIX, SPECT_FLAGM_EL) and not inside:
+                others.append((path, c))
+            if inside and FLAGM_PART in c:
+                hits.append((path, c))
+        for k in N.children(n):
+            if N.is_node(k):
+                walk(k, f'{path}.{N.name(k)}', mine)
+
+    for k in N.children(H._node_at(p.root, SPECT_ROOT)):
+        if N.is_node(k):
+            walk(k, f'{SPECT_ROOT}.{N.name(k)}', [()])
+    assert not others, ('other stock nodes target the spectator flag message', others[:6])
+    assert not hits, ('stock nodes target the flag message part', hits[:6])
+    return drawn, sum(1 for k in N.children(msg) if N.is_node(k))
 
 
 def build_spectator_scene(table_bytes, screen_bytes):
@@ -1918,13 +2981,21 @@ def build_spectator_template(ui_bytes, stock_ui_bytes, hud_stock_ui_bytes, T, co
     assert not fights, ('stock nodes set visible where the tower does', fights)
     assert any(ch == (SPECT_PREFIX, SPECT_HEADER_EL) for _p, ch in stock_vis), 'the stock header is no longer switched'
 
-    nodes = tower_nodes(T, hud, badge_tag, root_visible=U.prop('bool', True, SPECT_SHOW), series=(SPECT_SERIES, series_tag))
+    nodes = tower_nodes(T, hud, badge_tag, root_visible=U.prop('bool', True, SPECT_SHOW),
+                        series=(SPECT_SERIES, series_tag)) + [trial_off()]
     host = U.node('tt_host_n', 'UIGP', [('visible', H._bool_prop(False, leaf('on')))], kids=nodes,
                   layout=[SPECT_PREFIX, SPECT_TABLE_EL, HOST], behav=U.GROUP_BEHAVIOURS)
     masks = [U.node(nm, 'UIGP', [('visible', H._bool_prop(True, leaf('on'), True))], layout=list(chain),
                     behav=U.GROUP_BEHAVIOURS) for nm, chain in SPECT_MASKS]
     clock = clock_formatter(hud_p.root)
-    ctl = U.node(CTL, 'UIGP', [], kids=masks + [host, clock], behav=U.GROUP_BEHAVIOURS)
+    # the animations (anim_nodes), started when the screen opens and stopped when it closes (the content's own
+    # on_screen_opened / on_screen_closed, which trigger the stock driver list panel the same way)
+    base = f'{SPECT_PARENT}.{CTL}'
+    anim_host, anim_dec, anim_trig, anim_untrig, anim_info = anim_nodes(T, base)
+    check_anim_leaves(anim_info['leaves'], contract)
+    host.items[N.CHILDREN].items.extend(anim_host)
+    ctl = U.node(CTL, 'UIGP', [], kids=masks + [host, clock] + anim_dec, behav=U.GROUP_BEHAVIOURS)
+    ctl.items[N.COMMANDS].items.extend([U.command('trigger', anim_trig), U.command('untrigger', anim_untrig)])
 
     # every binding's type must be the type of the value it reads: a mismatch crashes the game when the screen opens
     bad, out = [], []
@@ -1939,15 +3010,56 @@ def build_spectator_template(ui_bytes, stock_ui_bytes, hud_stock_ui_bytes, T, co
         raise SystemExit('spectator tower binding types:\n  ' + '\n  '.join(bad))
     N.fix_ids(ctl, SPECT_PARENT)
     content.items[N.CHILDREN].items.append(ctl)
+    hook(content, 'on_screen_opened', U.sig(base, 'trigger', 'on_screen_opened'))
+    hook(content, 'on_screen_closed', U.sig(base, 'untrigger', 'on_screen_closed'))
+    # the screen's own flag message box hides while the tower shows (check_spect_flag_message): the HUD's
+    # node, switched by the tower's own leaf (NOT hud_tt_on; true while the leaf is absent)
+    flagm = flag_message_node(H._bool_prop(True, leaf('on'), True))
+    msg = H._node_at(p.root, SPECT_FLAGM_MSG)
+    assert H._type(msg) == 'F1HM', 'spectator flag message node'
+    sibs = [N.name(c) for c in N.children(msg) if N.is_node(c)]
+    assert FLAGM_NODE not in sibs, 'the spectator flag message already has the tower node'
+    assert djb2(FLAGM_NODE) not in [djb2(nm) for nm in sibs], 'a stock message node shares the name hash of ' + FLAGM_NODE
+    for node, prop, t, db in H._bindings(flagm, []):
+        want = spectator_binding_type(db, contract, hud, spect)
+        if not want or t not in want:
+            raise SystemExit(f'spectator flag message binding {node}.{prop} <- {db}: {t}, the value is {want}')
+        out.append((db, t))
+    N.fix_ids(flagm, SPECT_FLAGM_MSG)
+    msg.items[N.CHILDREN].items.append(flagm)
     data = p.to_bytes()
 
     # read back: the group once under content, its children in order, ids by path; outside tt_ctl the halo's .ui as given
     q = Pkg(data)
     got = H._node_at(q.root, f'{SPECT_PARENT}.{CTL}')
     kids = [N.name(c) for c in N.children(got)]
-    assert kids == [nm for nm, _ in SPECT_MASKS] + ['tt_host_n', 'tt_clock_fmt'], kids
-    assert H._canon(H._strip_ours(q.root, (CTL,))) == H._canon(Pkg(ui_bytes).root), 'a node outside tt_ctl changed'
-    assert H._canon(H._strip_ours(q.root, H.OUR_GROUPS + (CTL,))) == H._canon(stock_root), 'a stock node changed'
+    assert kids == [nm for nm, _ in SPECT_MASKS] + ['tt_host_n', 'tt_clock_fmt'] + [N.name(d) for d in anim_dec], kids
+    hooks = [(cmd, s['to_object_name'].value, s['to_pin_name'].value, s['to_object'].value)
+             for cmd in ('on_screen_opened', 'on_screen_closed')
+             for x in H._node_at(q.root, SPECT_PARENT).items[N.COMMANDS].items
+             if isinstance(x, Obj) and x['commandName'].value == cmd for s in x['signals'].items
+             if s['to_object_name'].value == base]
+    assert hooks == [('on_screen_opened', base, 'trigger', got.items[N.PROPS]['id'].value),
+                     ('on_screen_closed', base, 'untrigger', got.items[N.PROPS]['id'].value)], hooks
+    anim_info['readback_signals'] = check_anim_readback(got, base, anim_info)
+    # the flag message node, the last child of the message node, one switch on FLAGM_PART
+    qmsg = H._node_at(q.root, SPECT_FLAGM_MSG)
+    qk = [c for c in N.children(qmsg) if N.is_node(c)]
+    assert N.name(qk[-1]) == FLAGM_NODE and [N.name(c) for c in qk].count(FLAGM_NODE) == 1, 'spectator flag node'
+    fm = qk[-1]
+    fk = [c for c in N.children(fm) if N.is_node(c)]
+    assert not _chains(fm) and [N.name(c) for c in fk] == ['v_tt_flagm_' + FLAGM_PART], 'spectator flag node kids'
+    assert _chains(fk[0]) == [(FLAGM_PART,)], ('spectator flag node layout', _chains(fk[0]))
+    fv = fk[0].items[N.PROPS]['visible']
+    assert fv['dbentry'].value == leaf('on') and fv['dbentrynegate'].value is True and fv['value'].value is True, \
+        'spectator flag node switch'
+    fpath = f'{SPECT_FLAGM_MSG}.{FLAGM_NODE}'
+    assert fm.items[N.PROPS]['id'].value == N.djb2(fpath), 'spectator flag node id'
+    assert fk[0].items[N.PROPS]['id'].value == N.djb2(f'{fpath}.v_tt_flagm_{FLAGM_PART}'), 'spectator flag kid id'
+    assert H._canon(H._strip_ours(q.root, (CTL, FLAGM_NODE))) == H._canon(Pkg(ui_bytes).root), \
+        'a node outside tt_ctl and the flag message node changed'
+    assert H._canon(H._strip_ours(q.root, H.OUR_GROUPS + (CTL, FLAGM_NODE))) == H._canon(stock_root), \
+        'a stock node changed'
     count = 0
 
     def walk(n, path):
@@ -1961,5 +3073,8 @@ def build_spectator_template(ui_bytes, stock_ui_bytes, hud_stock_ui_bytes, T, co
     walk(got, f'{SPECT_PARENT}.{CTL}')
     info = {'nodes': count, 'tower_nodes': len(nodes), 'bindings': len(out),
             'dll_leaves': len({db for db, _ in out if db.startswith(VM)}),
-            'stock_visible_nodes': len(stock_vis), 'screen_vm': sorted({db for db, _ in out if not db.startswith('#')})}
+            'stock_visible_nodes': len(stock_vis), 'screen_vm': sorted({db for db, _ in out if not db.startswith('#')}),
+            'anim': {k: v for k, v in anim_info.items() if k != 'leaves'},
+            'flag_message': {'node': fpath, 'hides': FLAGM_PART, 'switch': 'NOT ' + leaf('on'),
+                             'stock_siblings': len(qk) - 1}}
     return data, info, out

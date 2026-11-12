@@ -168,12 +168,17 @@ constexpr uintptr_t set_vehicle = 0x34;        // u8: the set's vehicle index
 // also call SetActive, so the halo follows the director only while +0xd0 is set too (docs/spectator-ui.md §2).
 namespace spectate {
 constexpr uintptr_t key_rva = 0x6080ca8; // registry key (address of a static)
-constexpr uintptr_t lo = 0xd0, hi = 0xe8; // the span copied at once, once per scan
+constexpr uintptr_t lo = 0xd0, hi = 0xec; // the span copied at once, once per scan
 constexpr uintptr_t ui = 0xd0;          // u8 != 0 while the spectator HUD is up                         KB L1
 constexpr uintptr_t active = 0xd1;      // u8 != 0 while spectating                                      in game
 constexpr uintptr_t vehicle = 0xd6;     // u8 vehicle id, 0xff none                                      in game
-constexpr uintptr_t gap = 0xe4;         // u32 the spectator menu's gap mode (logged only)               KB L1
-static_assert(gap + 4 <= hi);
+// The spectator screen's update 0x141c24c80 reads both menu modes from this director ([screen+0x278]; the same object:
+// its F7/F8 handler 0x141c24af0 reads the watched car at +0xd6) and sets the board's switches from them
+// (docs/spectator-ui.md 10.4): gap_group_active = +0xe4 != 0; position_delta_active = +0xe8 == 1, pit_stops_active
+// == 2, tyre_icon_active 3 or 4, penalty_details_active == 5, detail_group_active not 0 and not 5.
+constexpr uintptr_t gap = 0xe4;         // u32 Gap: 0 none, 1 interval, 2 leader, 3 lap time        code; 1 in game
+constexpr uintptr_t detail = 0xe8;      // u32 Detail: 0 none, 1 position change, 2 stops, 3/4 tyre, 5 penalties  code
+static_assert(detail + 4 <= hi);
 } // namespace spectate
 
 // ---------------------------------------------------------------- helpers
@@ -508,7 +513,7 @@ struct F1_25Provider::Impl {
             ctrl_vid = -1;
     }
 
-    // The spectator director (scan time): one copy of +0xd0..+0xe7. spect_vid (the log's column since 2026-11-09)
+    // The spectator director (scan time): one copy of +0xd0..+0xeb. spect_vid (the log's column since 2026-11-09)
     // keeps its rule: the director active and its car below the table count.
     void read_spectate(uint32_t count, double now)
     {
@@ -523,6 +528,7 @@ struct F1_25Provider::Impl {
         spect.active = field<uint8_t>(b, spectate::lo, spectate::active);
         spect.vehicle = field<uint8_t>(b, spectate::lo, spectate::vehicle);
         spect.gap = field<uint32_t>(b, spectate::lo, spectate::gap);
+        spect.detail = field<uint32_t>(b, spectate::lo, spectate::detail);
         if (spect.active && spect.vehicle < count)
             spect_vid = spect.vehicle;
     }

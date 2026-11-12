@@ -18,30 +18,48 @@ const HALO = (() => {
     // (canvas transform a,b,c,d = M_DS), used only by theme 'screenshot' to overlay the reference frame.
     centreScale: 1.0,
     perspShot: [0.999042, -0.032283, -0.043768, 0.853476],
-    disc: { r: 39.37, inner: 34.4, rim: 35.0, ring: 1.2, light: 36.47, lightW: 0.55, dot: 2.2, dotY: 2.0, dotR: 0.3, stagger: false },
+    // look (docs/qa/discrepancies.md V17-V22, measured on the Interlagos reference in this plane): the collar is a
+    // ring from just inside the face out to r, see-through above collarFade[0] and full from collarFade[1] down (the
+    // broadcast shows the scene round the dial's upper half); the face is translucent (P.face) with a square mesh of
+    // lines `w` wide and `pitch` apart (P.mesh, P.mesh2: every second line a little stronger), its ink set so the mesh's
+    // contrast stays about even down the face as on the reference (lighter ink on the light top, stronger below)
+    disc: { r: 39.37, inner: 34.4, rim: 35.0, ring: 1.2, light: 36.47, lightW: 0.55, collarFade: [-7.5, -3.5], collarLow: [16, 29], mesh: { pitch: 1.0, w: 0.28 } },
     kmh: { y: -23.934, fs: 4.974, tr: 0.02 },
-    speed: { y: -14.874, fs: 13.529, tr: 0.35, sx: 1.068 },
+    // speed and mph are live texts (the game's font in game): Saira at its own width here (no x1.068 /
+    // x1.013 stretches fitted to the broadcast face)
+    speed: { y: -14.874, fs: 13.529, tr: 0.35 },
     boost: { y: -2.617, w: 27.8, h: 5.423, r: 3.0, fs: 3.938, tr: 0.5, hatchR: [15.6, 18.5, 20.8, 22.5, 24.0, 25.6, 26.9], hy0: -6.5, hy1: 0.5 },
     ot: { y: 4.718, w: 46.629, h: 5.05, fs: 3.924, tr: 0.243 },
-    mph: { y: 13.459, fs: 11.012, tr: 0.5, sx: 1.013 },
+    mph: { y: 13.459, fs: 11.012, tr: 0.5 },
     mphLbl: { y: 21.88, fs: 4.388, tr: 0.595 },
     batt: { x: 0.0, y: 32.41, w: 24.9, h: 7.45, r: 1.9, nubW: 0.75, nubH: 3.0, bolt: 0.86, bx: -0.19, by: 32.19 },
     // capsules: annulus rIn..rOut between yTop and yBot; letters upright, evenly spaced in angle on radius txtR
     caps: { rIn: 39.311, rOut: 50.854, yTop: -18.105, yBot: 22.059, rcOut: 3.0, rcIn: 2.0, fs: 3.602, txtR: 45.142, txtA0: -15.518, txtA1: 24.508 },
     // slats: n parallelograms with vertical ends on circles (rIn, centre y cyIn) and (rOut, cyOut); slat 0 = bottom,
     // centre y at x = xRef is y0 - i * pitch; every slat slopes k (down toward the outside)
-    stripes: { rIn: 53.058, cyIn: 2.805, rOut: 66.528, cyOut: 1.075, n: 10, y0: 22.781, pitch: 3.54, xRef: 59, k: 0.233, th: 2.16, pad: 0.9 },
-    brakeLbl: { x: -53.423, y: 31.523, rot: -15.979, lean: 16.193 },
+    // th: 2.40 (was the NCC fit's 2.16): the separators' FWHM then matches the reference's 0.75-0.84 (V8)
+    // litGap: the gap between two lit slats in their colour at this brightness (V20)
+    stripes: { rIn: 53.058, cyIn: 2.805, rOut: 66.528, cyOut: 1.075, n: 10, y0: 22.781, pitch: 3.54, xRef: 59, k: 0.233, th: 2.40, pad: 0.9, litGap: 0.5 },
+    // BRAKE / THROTTLE: `lean` is the stems' angle from the screen's vertical (frame()). On the Interlagos reference both
+    // labels stand upright on screen on their tilted baselines (label-box NCC against our label at known
+    // leans peaks at -2..+4 for BRAKE, +4..+6 for THROTTLE; the stem-edge angle reads -4 / +3), so their shear
+    // against the baseline stays: the reference shows it. BRAKE was +16.2 (a Melbourne fit, 32 deg against its baseline).
+    brakeLbl: { x: -53.423, y: 31.523, rot: -15.979, lean: -2.0 },
     throttleLbl: { x: 51.665, y: 30.667, rot: 13.023, lean: 2.98 },
     lblFs: 4.541,
     // values below were fitted against two Melbourne frames, t=205 s and t=262 s (fit.html, normalised cross-correlation)
+    // TURN and its number turned -20.6 degrees with no shear (lean = rot, was -1.6): the number is a live game
+    // text, which the game turns but cannot shear, and TURN (a sprite, shown only with a number) takes the
+    // number's transform, so the two match in the game
     turn: {
       arrow: { x: -87.419, y: 12.119, s: 1, rot: -53.081, lean: -28.65 },
-      lbl: { x: -82.816, y: 23.817, fs: 4.497, rot: -20.6, lean: -1.6, tr: 0.3 },
-      num: { x: -83.922, y: 31.143, fs: 7.934, rot: -20.6, lean: -1.6, tr: 0.3 },
+      lbl: { x: -82.816, y: 23.817, fs: 4.497, rot: -20.6, lean: -20.6, tr: 0.3 },
+      num: { x: -83.922, y: 31.143, fs: 7.934, rot: -20.6, lean: -20.6, tr: 0.3 },
     },
-    // "<position> <SURNAME>": the number ends at numEnd (lane u), the surname starts numGap after it
-    names: { x: -106.759, y: 37.261, rot: -26.18, bend: 0.002305, lean: -11, leanRel: 22, drvV: 0.73, laneGap: 13.784, drvFs: 8.508, rivFs: 6.963, rivShift: 3.703, tr: 1.26,
+    // "<position> <SURNAME>": the number ends at numEnd (lane u), the surname starts numGap after it. leanRel 0 =
+    // upright on the lane, as the game draws these live texts (docs/qa/discrepancies.md V11), without the
+    // broadcast's 22-degree lean (a shear beyond Saira's own axes)
+    names: { x: -106.759, y: 37.261, rot: -26.18, bend: 0.002305, lean: -11, leanRel: 0, drvV: 0.73, laneGap: 13.784, drvFs: 8.508, rivFs: 6.963, rivShift: 3.703, tr: 1.26,
              lineA: -7.495, lineB: 7.858, lineW: 0.8, railA0: 3.01, railB0: -3.02, cardEnd: -84.44, numEnd: -67.686, numGap: 6.86, numBox: 14.0, nameBox: 62.0 },
     aero: { x1: 89.654, y1: 4.458, x2: 88.54, y2: 8.787, rot: 16.347, lean: 13.047, fs: 4.371, tr: 0.587,
             barX: 85.19, barY: 19.65, barDx: 3.85, barDy: -3.76, barLen: 12.24, barAng: 15.5, slHx: 2.78, slHy: 0.76, slLen: 8.84, slAng: -52.1, slTh: 1.25, barTh: 1.1 },
@@ -69,20 +87,36 @@ const HALO = (() => {
     bandTop: 'rgba(24,62,78,0.50)', band: 'rgba(8,26,40,0.50)', bandBot: 'rgba(6,18,28,0.40)',
     bandEdge: 'rgba(150,212,222,0.42)', bandGlow: 'rgba(90,200,210,0.10)',
     wingFill: 'rgba(10,22,32,0.55)', wingLine: 'rgba(150,186,202,0.50)',
-    discOuter: 'rgba(4,30,52,0.92)', discTop: 'rgba(118,134,142,0.96)', discMid: 'rgba(45,73,88,0.96)', discBot: 'rgba(32,48,63,0.96)',
-    ringTop: 'rgba(160,184,200,0.95)', ringMid: 'rgba(125,146,166,0.88)', ringBot: 'rgba(60,85,100,0.35)', ringLight: 'rgba(132,151,163,0.85)',
-    white: '#F4F7F8', label: '#E4F0F3', dim: '#93A9BB', discDot: 'rgba(150,178,192,0.13)',
+    // dial (V17-V22): collar at the sides / above the waist; the face's tint stops (0 = its top, 1 = its bottom),
+    // translucent (alpha 0.8) and set so that over the reference's scene they give the measured face; the mesh's ink
+    // down the face (mesh2: added on every second line, a quarter of it); rings as [stop, colour] lists, fading toward
+    // the bottom like the reference's (bright ring at rim, its soft edge ringGlow, the thin light ring further out)
+    discOuterTop: 'rgba(23,36,52,0)', discOuter: 'rgba(23,36,52,0.92)', discOuterBot: 'rgba(18,32,44,0.92)',
+    face: [[0, 'rgba(170,183,189,0.8)'], [0.05, 'rgba(170,183,189,0.8)'], [0.151, 'rgba(136,152,163,0.8)'], [0.195, 'rgba(120,137,150,0.8)'],
+           [0.238, 'rgba(95,124,144,0.8)'], [0.282, 'rgba(86,106,126,0.8)'], [0.34, 'rgba(81,106,129,0.8)'], [0.413, 'rgba(59,84,108,0.8)'],
+           [0.762, 'rgba(49,70,91,0.8)'],
+           [0.878, 'rgba(28,52,66,0.8)'], [1, 'rgba(28,52,66,0.8)']],
+    mesh: [[0, 'rgba(6,14,22,0.068)'], [0.05, 'rgba(6,14,22,0.068)'], [0.2, 'rgba(6,14,22,0.096)'], [0.34, 'rgba(6,14,22,0.150)'], [0.78, 'rgba(6,14,22,0.156)'], [1, 'rgba(6,14,22,0.152)']],
+    mesh2: [[0, 'rgba(6,14,22,0.017)'], [0.05, 'rgba(6,14,22,0.017)'], [0.2, 'rgba(6,14,22,0.024)'], [0.34, 'rgba(6,14,22,0.0375)'], [0.78, 'rgba(6,14,22,0.039)'], [1, 'rgba(6,14,22,0.038)']],
+    ring: [[0, 'rgba(162,174,184,0.76)'], [0.02, 'rgba(162,174,184,0.78)'], [0.07, 'rgba(162,174,184,0.94)'], [0.15, 'rgba(162,174,184,0.95)'], [0.25, 'rgba(160,172,183,0.80)'], [0.63, 'rgba(158,170,181,0.83)'], [0.75, 'rgba(150,162,174,0.65)'],
+           [0.85, 'rgba(120,135,148,0.32)'], [1, 'rgba(100,115,128,0.50)']],
+    ringGlow: [[0, 'rgba(150,162,170,0.16)'], [0.25, 'rgba(150,162,170,0.14)'], [0.37, 'rgba(150,162,170,0.10)'], [0.63, 'rgba(150,162,170,0.08)'], [0.85, 'rgba(150,162,170,0)']],
+    ringLight: [[0, 'rgba(176,184,190,0.60)'], [0.02, 'rgba(176,184,190,0.62)'], [0.07, 'rgba(176,184,190,0.83)'], [0.1, 'rgba(176,184,190,0.82)'], [0.25, 'rgba(176,184,190,0.73)'], [0.37, 'rgba(174,182,189,0.72)'], [0.63, 'rgba(170,178,186,0.645)'],
+                [0.75, 'rgba(160,170,178,0.57)'], [0.85, 'rgba(130,140,150,0.24)'], [0.93, 'rgba(110,120,130,0)']],
+    white: '#F4F7F8', label: '#E4F0F3', dim: '#93A9BB',
     boostFill: '#475A6D', boostLine: '#5B7183', boostText: '#9CADBC', hatch: 'rgba(120,146,170,0.85)',
     boostOn: '#33ADF7', boostOnLine: '#A6DDFF', boostOnText: '#062238', hatchOn: 'rgba(127,214,255,0.95)',
     // OVERTAKE lit: bright green outline and letters on a dark-green fill (docs/research 3.3)
     otOnTop: '#1A7438', otOnBot: '#12602C', otOnLine: '#52C878', otOnText: '#58C070', otOnGlow: 'rgba(80,200,120,0.30)',
     otOff: 'rgba(92,101,108,0.92)', otOffLine: 'rgba(130,140,148,0.8)', otOffText: '#283035',
     capOff: 'rgba(30,84,124,0.95)', capOffLine: '#3A88B8', capOffText: '#5DB0D6',
-    capOnTop: '#3A9AEE', capOnBot: '#1784CE', capOnLine: '#44B0E4', capOnText: '#58A2F0',
-    // unlit slats dark grey; lit brake red (207,84,101), lit throttle teal-green (48,186,158) as measured on
-    // compressed footage, lifted a little toward the source colours (docs/research 3.6)
-    stripePanel: 'rgba(18,30,40,0.80)', stripeOff: 'rgba(66,78,88,0.92)',
-    throttle: '#18D6A0', throttleTop: '#26DCA9', brake: '#E2566A', brakeTop: '#EC6A7C',
+    // lit capsule fill (V22): a little darker, to the reference's DEPLOY-lit #1686CA-#1986D1 (was #3A9AEE / #1784CE)
+    capOnTop: '#2793E1', capOnBot: '#0F7EC3', capOnLine: '#44B0E4', capOnText: '#58A2F0',
+    // unlit slats blue-grey; lit brake red (207,84,101) as measured on compressed footage, lifted a little toward the
+    // source colours (docs/research 3.6). V20: the panel between the slats, the unlit slats and the lit throttle
+    // from the Interlagos reference (separators (35,58,76), unlit (56,79,97), lit throttle (44,216,191))
+    stripePanel: 'rgba(33,58,79,0.85)', stripeOff: 'rgba(58,82,99,0.92)',
+    throttle: '#2CD8BF', throttleTop: '#36DDC6', brake: '#E2566A', brakeTop: '#EC6A7C',
     battLine: '#4FB8E1', battFillTop: '#1489D6', battFillBot: '#0F7DCB', battIn: '#235079', battCharge: '#0E4877', bolt: '#4FE0F5',
     aeroOn: '#45E4D4', aeroBar: '#C9D3D8', gearDim: 'rgba(205,216,222,0.86)', track: 'rgba(160,182,195,0.55)', gearLbl: '#C9D5DD',
     // G-force variant: Spa clip samples (360p, compressed) cyan (125-134, 209-222, 220-228), white (228, 234, 238),
@@ -278,20 +312,19 @@ const HALO = (() => {
   const stripePitch = () => G.stripes.pitch;
   const stripeY = i => G.stripes.y0 - i * G.stripes.pitch;
   const slatColour = (i, on, onTop) => (i >= G.stripes.n * 0.62 ? onTop : on);
-  function drawSlat(g, left, i, col, glow) {
-    const s = G.stripes, xm = (stripeXin(i) + stripeXout(i)) / 2, ym = stripeLine(i, xm);
-    if (glow) { poly(g, slatPts(i, left, 0.5)); g.fillStyle = col; g.globalAlpha = 0.22; g.fill(); g.globalAlpha = 1; }
-    // a slight top-to-bottom shade, like the broadcast's lit slats
-    const gr = g.createLinearGradient(0, ym - s.th / 2, 0, ym + s.th / 2);
-    gr.addColorStop(0, col); gr.addColorStop(1, shade(col, glow ? 0.86 : 0.92));
-    poly(g, slatPts(i, left)); g.fillStyle = gr; g.fill(); g.strokeStyle = gr; g.lineWidth = 0.3; g.stroke();
-  }
-  // darken a #rrggbb or rgba() colour by factor k (alpha kept)
-  function shade(col, k) {
-    let r, gg, b, a = 1;
-    if (col[0] === '#') { r = parseInt(col.slice(1, 3), 16); gg = parseInt(col.slice(3, 5), 16); b = parseInt(col.slice(5, 7), 16); }
-    else { [r, gg, b, a = 1] = col.match(/[\d.]+/g).map(Number); }
-    return `rgba(${Math.round(r * k)},${Math.round(gg * k)},${Math.round(b * k)},${a})`;
+  // '#RRGGBB' at k of its brightness
+  const scaleHex = (hex, k) => `rgb(${[1, 3, 5].map(j => Math.round(parseInt(hex.slice(j, j + 2), 16) * k)).join(',')})`;
+  function drawSlat(g, left, i, col, lit) {
+    // lit slats (V20): the gap down to the slat below (always lit too, as the lit slats run up from slat 0) in the
+    // slat's colour at half brightness, as the reference's lit gaps measure (20,113,95) against its slats' (49,219,195);
+    // this replaced an earlier build's 22 % glow round each lit slat. Each lit slat is one sprite in the game, so the gap is part of it.
+    if (lit && i > 0) {
+      const a = slatPts(i - 1, left, 0.15), b = slatPts(i, left, 0.15);   // 0.15: clear of the slats' 0.3 outline
+      poly(g, [a[0], a[1], b[2], b[3]]); g.fillStyle = scaleHex(col, G.stripes.litGap); g.fill();
+    }
+    // one flat colour along the whole slat (V20: the reference keeps its lightness end to end; the old
+    // top-to-bottom shade darkened the sloping slats toward their outer ends)
+    poly(g, slatPts(i, left)); g.fillStyle = col; g.fill(); g.strokeStyle = col; g.lineWidth = 0.3; g.stroke();
   }
 
   function drawCapsule(g, left, level, word) {
@@ -344,19 +377,45 @@ const HALO = (() => {
     battBolt(g); // always shown (docs/research 3.4)
   }
 
+  // a vertical gradient over y0..y1 from a [[stop, colour], ...] list
+  function vGrad(g, y0, y1, stops) { const gr = g.createLinearGradient(0, y0, 0, y1); stops.forEach(([t, c]) => gr.addColorStop(t, c)); return gr; }
+  // the collar (V17): a ring from just inside the face out to G.disc.r, see-through round the dial's upper half
+  // (P.discOuterTop above collarFade[0]) and dark from collarFade[1] down, a little darker below the dial's middle
+  // (P.discOuter to P.discOuterBot over collarLow); nothing under the face, so its translucency shows the scene
+  function drawCollar(g) {
+    const d = G.disc, [ya, yb] = d.collarFade, [yc, yd] = d.collarLow, T = y => (y - ya) / (d.r - ya);
+    g.beginPath(); g.arc(0, 0, d.r, 0, 2 * Math.PI); g.moveTo(d.inner - 0.2, 0); g.arc(0, 0, d.inner - 0.2, 0, 2 * Math.PI);
+    g.fillStyle = vGrad(g, ya, d.r, [[0, P.discOuterTop], [T(yb), P.discOuter], [T(yc), P.discOuter], [T(yd), P.discOuterBot], [1, P.discOuterBot]]);
+    g.fill('evenodd');
+  }
   function drawDisc(g) {
-    const d = G.disc;
-    const gr = g.createLinearGradient(0, -d.inner, 0, d.inner); gr.addColorStop(0, P.discTop); gr.addColorStop(0.3, P.discMid); gr.addColorStop(1, P.discBot);
-    g.beginPath(); g.arc(0, 0, d.inner, 0, 7); g.fillStyle = gr; g.fill();
-    // fine dot texture over the face (broadcast: "dark translucent disc with a dot texture", docs/research 3.1)
-    g.save(); g.beginPath(); g.arc(0, 0, d.inner - 0.4, 0, 7); g.clip(); g.fillStyle = P.discDot;
-    const dy = d.dotY || d.dot;
-    for (let y = -d.inner; y <= d.inner; y += dy) for (let x = -d.inner; x <= d.inner; x += d.dot) { g.beginPath(); g.arc(x + (d.stagger !== false && (Math.round(y / dy) & 1) ? d.dot / 2 : 0), y, d.dotR, 0, 7); g.fill(); }
+    const d = G.disc, m = d.mesh;
+    // translucent face (V18): tint stops P.face, alpha in the colours
+    g.beginPath(); g.arc(0, 0, d.inner, 0, 2 * Math.PI); g.fillStyle = vGrad(g, -d.inner, d.inner, P.face); g.fill();
+    // square mesh over the face (V19; was dots on a 2.2 lattice): lines m.w wide, m.pitch apart, on both axes,
+    // the ink set per height (P.mesh: light on the light top, stronger lower down, so the contrast stays about even as on
+    // the reference); every second line once more (P.mesh2, the reference's 2.0 harmonic). One stroke per path, so
+    // crossings are not darker than the lines.
+    g.save(); g.beginPath(); g.arc(0, 0, d.inner - 0.2, 0, 2 * Math.PI); g.clip();
+    const n = Math.ceil(d.inner / m.pitch) + 1;
+    const lines = keep => {
+      g.beginPath();
+      for (let k = -n; k < n; k++) {
+        if (!keep(k)) continue;
+        const p = (k + 0.5) * m.pitch;
+        g.moveTo(p, -d.inner); g.lineTo(p, d.inner); g.moveTo(-d.inner, p); g.lineTo(d.inner, p);
+      }
+    };
+    g.lineWidth = m.w; g.lineCap = 'butt';
+    lines(() => true); g.strokeStyle = vGrad(g, -d.inner, d.inner, P.mesh); g.stroke();
+    lines(k => (k & 1) === 0); g.strokeStyle = vGrad(g, -d.inner, d.inner, P.mesh2); g.stroke();
     g.restore();
-    const rg = g.createLinearGradient(0, -d.rim, 0, d.rim); rg.addColorStop(0, P.ringTop); rg.addColorStop(0.55, P.ringMid); rg.addColorStop(0.95, P.ringBot);
-    g.beginPath(); g.arc(0, 0, d.rim, 0, 7); g.strokeStyle = 'rgba(150,205,220,0.10)'; g.lineWidth = 2.4; g.stroke();
-    g.strokeStyle = rg; g.lineWidth = d.ring; g.stroke();
-    if (d.light) { g.beginPath(); g.arc(0, 0, d.light, 0, 7); g.strokeStyle = P.ringLight; g.lineWidth = d.lightW; g.stroke(); }
+    // rings (V21): the bright ring at rim with its soft edge, the thin light ring further out; both neutral,
+    // fading toward the bottom and a little at the very top (from 60 degrees up), like the reference's
+    g.beginPath(); g.arc(0, 0, d.rim, 0, 2 * Math.PI);
+    g.strokeStyle = vGrad(g, -d.rim, d.rim, P.ringGlow); g.lineWidth = 2.4; g.stroke();
+    g.strokeStyle = vGrad(g, -d.rim, d.rim, P.ring); g.lineWidth = d.ring; g.stroke();
+    if (d.light) { g.beginPath(); g.arc(0, 0, d.light, 0, 2 * Math.PI); g.strokeStyle = vGrad(g, -d.light, d.light, P.ringLight); g.lineWidth = d.lightW; g.stroke(); }
   }
   function drawBoost(g, on) {
     const B = G.boost;
@@ -401,8 +460,8 @@ const HALO = (() => {
     rr(g, ox, oy, E.w, E.h, E.r); g.fillStyle = look[0]; g.fill(); g.strokeStyle = look[1]; g.lineWidth = look[3]; g.stroke();
     text(g, ERS_MODES[mode], 0, E.y, E.fs, look[2], { tr: E.tr, w: mode === 2 ? 760 : 700 });
   }
-  const speedText = (g, kmh) => text(g, String(Math.round(kmh)), 0, G.speed.y, G.speed.fs, P.white, { tr: G.speed.tr, sx: G.speed.sx, w: 780 });
-  const mphText = (g, kmh) => text(g, String(Math.round(kmh * 0.621371)), 0, G.mph.y, G.mph.fs, P.white, { tr: G.mph.tr, sx: G.mph.sx, w: 780 });
+  const speedText = (g, kmh) => text(g, String(Math.round(kmh)), 0, G.speed.y, G.speed.fs, P.white, { tr: G.speed.tr, w: 780 });
+  const mphText = (g, kmh) => text(g, String(Math.round(kmh * 0.621371)), 0, G.mph.y, G.mph.fs, P.white, { tr: G.mph.tr, w: 780 });
   function drawDial(g, st) {
     const C = carClass(st);
     drawDisc(g);
@@ -513,8 +572,7 @@ const HALO = (() => {
   function drawTurnNumber(g, s) { const n = G.turn.num; text(g, String(s), n.x, n.y, n.fs, P.white, { tr: n.tr, rot: n.rot, lean: n.lean, w: 760 }); }
   function drawTurnLabel(g) { const l = G.turn.lbl; text(g, 'TURN', l.x, l.y, l.fs, P.label, { tr: l.tr, rot: l.rot, lean: l.lean }); }
   function drawTurn(g, st) {
-    if (st.turn) { drawTurnArrow(g, st.turnDir === 'R'); drawTurnNumber(g, st.turn); }
-    drawTurnLabel(g);
+    if (st.turn) { drawTurnArrow(g, st.turnDir === 'R'); drawTurnNumber(g, st.turn); drawTurnLabel(g); }
   }
 
   function lanePoint(n, u, v) {
@@ -651,7 +709,7 @@ const HALO = (() => {
   }
   function drawCentre(g, st) {
     g.save(); centreFrame(g, st);
-    g.beginPath(); g.arc(0, 0, G.disc.r, 0, 7); g.fillStyle = P.discOuter; g.fill();   // navy collar around the dial
+    drawCollar(g);   // the collar around the dial (see-through above its waist)
     if (!gOn(st) && carClass(st).capsules) { drawCapsule(g, true, st.recharge, 'RECHARGE'); drawCapsule(g, false, st.deploy, 'DEPLOY'); }   // G variant, F2: no capsules
     drawStripes(g, true, st.brake, P.brake, P.brakeTop);
     drawStripes(g, false, st.throttle, P.throttle, P.throttleTop);
@@ -676,7 +734,7 @@ const HALO = (() => {
   // Static / moving pieces for the addon's texture export (export.html).
   const internals = {
     D, FONT, CAP, text, frame, rr, poly, lerp, bez, bezTan, lanePoint, laneAngle, laneText, capsulePts, stripePanelPts,
-    capsXin, capsXout, stripeXin, stripeXout, stripeLine, slatPts, slatColour, stripeY, stripePitch, drawSlat, centreFrame, drawCentreLabels, drawBand, drawWing, drawStripes, drawCapsule, drawDisc, drawBoost, drawOT, speedText,
+    capsXin, capsXout, stripeXin, stripeXout, stripeLine, slatPts, slatColour, stripeY, stripePitch, drawSlat, centreFrame, drawCentreLabels, drawBand, drawWing, drawStripes, drawCapsule, drawCollar, drawDisc, drawBoost, drawOT, speedText,
     mphText, battInterior, battFill, battOutline, battBolt, drawGStatic, gText, gSlots, gChar, gOn, gView, gFormat, drawGRings, drawGLabel,
     drawGArc, drawGSeg, drawGBlock, gSector, turnArrow, drawTurnArrow, drawTurnNumber,
     drawTurnLabel, drawRails, drawAeroLabel, drawAeroBars, gearPt, drawGearTrack, drawRpmBar, drawGearMarker,

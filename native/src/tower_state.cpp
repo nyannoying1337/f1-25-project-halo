@@ -473,16 +473,30 @@ bool badge_key_ok(const char *s, size_t cap)
     return false; // no NUL within the bound
 }
 
-bool badge_text(const char *key, char *out, size_t cap)
+bool render_key_ok(const char *s, size_t cap)
+{
+    if (!s || !cap)
+        return false;
+    size_t n = 0;
+    for (; n < cap && s[n]; ++n)
+        if ((unsigned char)s[n] < 0x20 || (unsigned char)s[n] > 0x7e)
+            return false;
+    return n > 0 && n < cap && n < kBadgeKeyMax && s[0] != ' ' && s[n - 1] != ' ';
+}
+
+bool badge_text(const char *key, char *out, size_t cap, bool render)
 {
     if (!out || !cap)
         return false;
     out[0] = 0;
-    if (cap < kBadgeTextMax || !badge_key_ok(key, kBadgeKeyMax))
+    static_assert(kRenderBadgePrefixLen <= kBadgePrefixLen, "the render path fits the leaf text");
+    if (cap < kBadgeTextMax || !(render ? render_key_ok(key, kBadgeKeyMax) : badge_key_ok(key, kBadgeKeyMax)))
         return false;
     const size_t n = std::strlen(key);
-    std::memcpy(out, kBadgePrefix, kBadgePrefixLen);
-    std::memcpy(out + kBadgePrefixLen, key, n + 1);
+    const char *pre = render ? kRenderBadgePrefix : kBadgePrefix;
+    const size_t pn = render ? kRenderBadgePrefixLen : kBadgePrefixLen;
+    std::memcpy(out, pre, pn);
+    std::memcpy(out + pn, key, n + 1);
     return true;
 }
 

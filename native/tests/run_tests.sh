@@ -16,7 +16,7 @@ echo "leaf list: $O/leaves.txt"
 "$ZIG" c++ -target x86_64-windows-gnu -std=c++20 -O1 -g -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX \
   -I "$HERE/include" -o "$O/test_tower.exe" \
   "$HERE/tests/test_tower.cpp" "$HERE/src/tower_reader.cpp" "$HERE/src/tower_model.cpp" "$HERE/src/tower_leaves.cpp" \
-  "$HERE/src/tower_state.cpp" "$HERE/src/diag_log.cpp"
+  "$HERE/src/tower_state.cpp" "$HERE/src/diag_log.cpp" "$HERE/src/tower_anim.cpp"
 "$O/test_tower.exe" "$O"
 echo "tower leaf list: $O/tower_leaves.txt"
 # G-force meter: filter, indicator rules, flash, model wiring, leaves

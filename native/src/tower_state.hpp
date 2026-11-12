@@ -45,7 +45,34 @@ constexpr uintptr_t red_flag = 0x60fde00;           // "RedFlagSystem": slot0 0x
 // its constructor 0x141759a40 (stores 0x141759ab1 / 0x141759ae4) and its badge setter 0x141760020 reads
 constexpr uintptr_t game_mode_context = 0x604ed28;  // pill [vm+0x20]; also [g_Game_Manager]+0xc0 (0x1407eb3da)
 constexpr uintptr_t team_tables = 0x606ecd8;        // pill [vm+0x28]: the team tables per kind at +0x2c8
+// the race's fastest lap (field-traces.md §11): VehicleLapTimes, the system Sess_LapTimes_GetCarData
+// 0x142f0c7f0 takes (the pill VM keeps it at +0x1f40, data-and-ui.md "Systems the VM holds")
+constexpr uintptr_t lap_times = 0x6096ae8;
 } // namespace keys
+
+// The game's lap times (field-traces.md §11). LT = registry(lap_times). Per vehicle id a record pointer in the
+// vector [LT+0x58, LT+0x60) (Sess_LapTimes_GetCarData 0x142f0c7f0: element vid, null = no record). In a record the
+// lap index u8 +0x38 and kMaxLaps lap entries of 0xc8 bytes from +0x40. In an entry (Sess_LapTimes_IsNewFastestLap
+// 0x142f2e520): the three sector times f32 bits +0x08 ^ +0x10, +0x18 ^ +0x20, +0x28 ^ +0x30, the lap time f32 bits
+// +0xa8 ^ +0xb0 (s), the invalid flag u8 +0x98 ^ (u64 +0xa0 & 1). The game's best lap of a car: the lowest lap time
+// among its entries with three non-zero sector times and the flag 0 (the loop 0x142f2e580..0x142f2e5ef, sorted by
+// Sess_LapRecords_SortByTime). The fastest car: u8 LT+0xb8, set at a lap's end when Sess_LapTimes_IsNewFastestLap
+// says so (0x142f2d8d5, with the new-fastest-lap byte +0xc8), 0xff after Sess_LapTimes_Reset (0x142f2aebb).
+namespace laptimes {
+constexpr uintptr_t cars = 0x58;          // vector [LT+0x58, LT+0x60) of record pointers by vehicle id
+constexpr uintptr_t fastest = 0xb8;       // u8: the fastest car's vehicle id, 0xff none
+constexpr size_t header = 0x68;           // one copy of [LT+0x58, LT+0xc0): the vector and the fastest car
+constexpr uintptr_t lap_index = 0x38;     // u8 in the record
+constexpr uintptr_t laps = 0x40;          // the first lap entry
+constexpr size_t lap_stride = 0xc8;
+constexpr size_t max_laps = 200;          // entries per record (the loop's end 0x9c40)
+constexpr size_t sector[3] = {0x08, 0x18, 0x28};
+constexpr size_t time = 0xa8;             // f32 bits, xor the u32 8 bytes on (as each sector time)
+constexpr size_t pair = 8;
+constexpr size_t invalid = 0x98;          // u8, xor (u64 +0xa0 & 1): 0 = a valid lap
+constexpr size_t invalid_key = 0xa0;
+constexpr uint8_t none = 0xff;
+} // namespace laptimes
 
 // The registry ([[g_Game_Manager]+0x30]) is a robin-hood map: 16-byte {key, value} slots from pointer [reg+0x18]
 // up to pointer [reg+0x20]; one "used" byte per slot starts at pointer [reg+0x20] (the layout the provider's
@@ -245,6 +272,24 @@ constexpr uintptr_t record_render = 0x58d;  // u8: nonzero = the record shows a 
 constexpr unsigned max_kind = 2;
 constexpr unsigned my_team_kind = 1;
 } // namespace badge
+// The render badge (field-traces.md §10.6). A record whose byte +0x58d is set, in a team table other than My
+// Team's, shows Team_Format_RenderBadgePath (its body 0x14c0d38f0) of the entrant's badge u32 +0x68: the low byte
+// a source (the name table 0x145612e60: ePreLoaded, eUserDefined, eNetworkReplicated), the high 16 bits an id. The
+// path: kRenderBadgePrefix + "<source name> <id>" (Ne_StrBuf_Printf "%s %u"), or kRenderBadgePrefix +
+// "default.tga" when the id equals the game's none value (u32 [0x14bd53ed8] + 0x5874f662). The reader keeps the
+// part after the prefix as the car's key (render = true).
+namespace render_badge {
+constexpr uintptr_t entrant_badge = 0x68;     // u32 in the entrant record
+constexpr uintptr_t names = 0x5612e60;        // image rva: char *[max_source + 1]
+constexpr unsigned max_source = 2;
+constexpr uintptr_t none_word = 0xbd53ed8;    // image rva: u32; + none_add = the id drawn as the default
+constexpr uint32_t none_add = 0x5874f662;
+constexpr uintptr_t customisation = 0x6064cb8; // image rva: the player customisation system's singleton pointer
+constexpr uintptr_t standard_badge = 0x1b8;    // u32 in it (Game_PlayerCustomisationInfoSystem_WriteSaveData)
+} // namespace render_badge
+constexpr const char kRenderBadgePrefix[] = "eaid://ui_package/art/textures/render_badge_";
+constexpr size_t kRenderBadgePrefixLen = sizeof kRenderBadgePrefix - 1; // 44
+constexpr const char kRenderBadgeDefault[] = "default.tga";
 // The leaf text: kBadgePrefix (0x145706ede and the "." of 0x14570c9c6) + the key.
 constexpr const char kBadgePrefix[] = "#overrides.osd.timing_tower.team_badges_hud.";
 constexpr size_t kBadgePrefixLen = sizeof kBadgePrefix - 1; // 44
@@ -254,7 +299,10 @@ constexpr size_t kBadgeTextMax = kBadgePrefixLen + kBadgeKeyMax; // the leaf tex
 // NUL-terminated within s[0..cap). Anything else is unknown, never cut or repaired.
 bool badge_key_ok(const char *s, size_t cap);
 // out = kBadgePrefix + key: the pill's own string. False and out = "" when the key is not ok or cap < kBadgeTextMax.
-bool badge_text(const char *key, char *out, size_t cap);
+// render = true names a render badge: kRenderBadgePrefix + key, the key 1..kBadgeKeyMax - 1 printable ASCII
+// characters with the space (0x20..0x7e), not starting or ending with one
+bool render_key_ok(const char *s, size_t cap);
+bool badge_text(const char *key, char *out, size_t cap, bool render = false);
 
 // ---------------------------------------------------------------- knockout (formula only; inputs not wired)
 

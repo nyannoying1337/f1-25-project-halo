@@ -115,7 +115,7 @@ struct FieldState {
     uint8_t pos[kMaxCars]{};
 };
 
-// The game's spectator director (docs/spectator-ui.md §2; component in the registry, fields +0xd0..+0xe7 copied
+// The game's spectator director (docs/spectator-ui.md §2; component in the registry, fields +0xd0..+0xeb copied
 // once per scan). spect_vid followed the director through all 22 cars in game (2026-11-10 04:27 log).
 struct SpectateState {
     bool found = false;         // the director component is in the registry
@@ -123,7 +123,8 @@ struct SpectateState {
     uint8_t ui = 0;             // +0xd0: the spectator HUD is up (session.spectator_mode.active)
     uint8_t active = 0;         // +0xd1: the director spectates
     uint8_t vehicle = 0xff;     // +0xd6: the watched car's vehicle id, 0xff none
-    uint32_t gap = 0;           // +0xe4: the spectator menu's Gap mode (logged only; KB: 1 interval, 2 leader, 3 lap)
+    uint32_t gap = 0;           // +0xe4: the spectator menu's Gap: 0 none, 1 interval, 2 leader, 3 lap time (10.4)
+    uint32_t detail = 0;        // +0xe8: its Detail: 0 none, 1 position change, 2 stops, 3/4 tyre, 5 penalties
     bool on = false;            // the halo follows the watched car: found, read, ui, active and a car in the table
 };
 

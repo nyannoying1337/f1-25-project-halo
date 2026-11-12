@@ -19,7 +19,8 @@ usage: python -I build_tower.py <stock folder> <tower sprites dir> <addon dir> <
 Writes
   erp/tower_scene.erp     flow_race, flow_options, persistent: the stacked table (+ tt_host), the bottom cap (+ the
                           tower, whose rows reference the game's own team logo unit and whose header references the
-                          game's own lap counter logo unit: nothing of either is copied), the
+                          game's own lap counter logo unit: nothing of either is copied; the rows' anim nulls'
+                          clips and the cap's string table with their names), the
                           table's .uipre (HUD editor preview), the tower's textures, materials, bindings,
                           and the Race Control banner: the top-centre toast's 12 scenes restyled (banner_native.py)
                           plus static nodes in the toast template that hide the banner's decorations
@@ -53,7 +54,7 @@ import tower_native as T  # noqa: E402  (sets up the native/ and SWOFTY_TOOLS pa
 import tower_resources as TR  # noqa: E402
 import banner_native as BN  # noqa: E402
 import erpbuild as E  # noqa: E402
-from build_native import read, index, MAT  # noqa: E402
+from build_native import read, index, MAT, CLIP_TMPL, MODS  # noqa: E402
 
 I = T.I
 
@@ -203,6 +204,11 @@ def scene_json(T_, cap_bytes, root_name=T.ROOT):
                      pos=[d['pos'][0] + s * cx, d['pos'][1] + s * cy, 0.0], w=s * T_.B.logo_side, h=s * T_.B.logo_side)
         elif e.type == 'eStacker':
             d.update(stackerType=I.get_param(o, 'stackerType'), gap=I.get_param(o, 'gap'))
+        elif e.type == 'eWindow':
+            # the header's clip window (tt_clip): its rect in its own frame (the extents, centred), for the
+            # simulator's clip and bounds (both assumed)
+            w, l = I.get_param(o, 'width'), I.get_param(o, 'length')
+            d['rect'] = [-w / 2, -l / 2, w / 2, l / 2]
         return d
 
     return node(root)
@@ -244,11 +250,19 @@ def main():
     z = np.load(os.path.join(a.sprites, 'sprites.npz'))
     sprites = {n: {'img': z[n]} for n in z.files}
     sprites.update(TR.solid_images(meta['P']))
+    assert 'ko' not in sprites, 'the export has a ko sprite'
+    sprites['ko'] = {'img': TR.hatch_image(meta['G'])}         # the knockout hatch, drawn in tower_resources
+    assert 'fl' not in sprites, 'the export has an fl sprite'
+    sprites['fl'] = {'img': TR.fastest_lap_image(T.FLASH['ob'], meta['sprites']['pen'])}  # drawn too
 
     race = os.path.join(a.stock, SCENE_ERPS[0])
-    scenes = [T.STACKED, T.STACKED_UIPRE, T.CAP]
+    # the lap counter scene too (its panel parts wrapped), the same in every archive the cap scene goes to,
+    # and the cap scene's anim string table (the rows' anim nulls' names are appended to it)
+    scenes = [T.STACKED, T.STACKED_UIPRE, T.CAP, T.LAPC, T.CAP_STRTAB]
     gtex = list(TR.GAME_TEX.values())
-    stock = read(race, scenes + [T.DIAL, T.LAPC, T.ROW, TEMPLATE, MAT] + [t + '.image' for t in gtex])
+    # dial_mods.idf, the clip window's model (as the halo's windows)
+    stock = read(race, scenes + [T.DIAL, T.ROW, TEMPLATE, MAT, T.FLAGM_SCENE, CLIP_TMPL, MODS] +
+                 [t + '.image' for t in gtex])
     # the team logo unit the tower's rows reference (round 3): every one of its resources (scene, clips, mesh,
     # material binding) in every archive that carries the cap scene, the same bytes as in flow_race
     unit = logo_unit(race)
@@ -294,11 +308,21 @@ def main():
 
     res, embs = TR.tower_resources(sprites, stock[MAT][0], os.path.join(a.work, 'bc7_cache'))
     cap, tw, tpv = T.build_cap(stock[T.CAP][0], stock[T.DIAL][0], stock[T.LAPC][0], stock[T.STACKED][0], embs, meta,
-                               stock[T.ROW][0], unit[T.LOGO][0], cat[T.CAT_LOGO][0], a.debug_dropzone)
+                               stock[T.ROW][0], unit[T.LOGO][0], cat[T.CAT_LOGO][0], a.debug_dropzone,
+                               mods_bytes=stock[MODS][0])
     stacked = T.build_stacked(stock[T.STACKED][0])
+    # the rows' anim nulls' clips (the halo's clip template and form) and the cap's string table with their names
+    anim_strtab, anim_clips, anim_keyinfo = T.anim_clips(stock[CLIP_TMPL][0], stock[T.CAP_STRTAB][0], tw.B.anims,
+                                                         T.KT * meta['G']['p'])
+    # the keys' straight lines stay within 0.004 row pitches of the broadcast's ease-out profile (0.12 HUD units on a 30-unit row)
+    assert anim_keyinfo['err_rows'] < 0.004, anim_keyinfo
+    stock_clip = f'{T.CAP}/{T.CAP_ANIM}?context=animation'
+    assert all(f'{T.CAP}/{nm}?context=animation' != stock_clip for nm in anim_clips)
     pv_texts = tpv.pv_texts
     uipre, nset = T.build_uipre(stock[T.STACKED_UIPRE][0], pv_texts)
-    nlapc = T.check_lap_counter(stock[T.LAPC][0], stock[TEMPLATE][0])
+    lapc_scene = T.build_lapc_scene(stock[T.LAPC][0])
+    nlapc = T.check_lap_counter(stock[T.LAPC][0], lapc_scene, stock[TEMPLATE][0])
+    nflag = T.check_flag_message(stock[T.FLAGM_SCENE][0], stock[TEMPLATE][0])
     template, nnodes, bindings = T.build_template(halo_tmpl, stock[TEMPLATE][0], tw, contract)
     hud_growth = len(template) - len(halo_tmpl)
     # the banner's decorations: static hide nodes in the toast template (round 2: isHidden alone did not hold)
@@ -321,6 +345,14 @@ def main():
 
     # the spectator screen (docs/spectator-ui.md 10.3): the same tower nodes in the halo's spectator template, tt_host
     # in the board's table scene
+    # the screen's own flag message (its scene reference, its stock nodes); the scene the screen loads is the
+    # one checked: its copy in both spectator archives = the one in flow_race
+    for arch in SPECT_ERPS:
+        got = read(os.path.join(a.stock, arch), [T.FLAGM_SCENE])
+        if b''.join(got[T.FLAGM_SCENE]) != b''.join(stock[T.FLAGM_SCENE]):
+            raise SystemExit(f'{arch}: its flag message scene is not the one in flow_race')
+    sflag, sflag_nodes = T.check_spect_flag_message(stock[T.FLAGM_SCENE][0], sstock[T.SPECT_SCREEN][0],
+                                                    sstock[T.SPECT_UI][0])
     sscene, ssinfo = T.build_spectator_scene(sstock[T.SPECT_TABLE][0], sstock[T.SPECT_SCREEN][0])
     sui, sinfo, sbindings = T.build_spectator_template(halo_spect, sstock[T.SPECT_UI][0], stock[TEMPLATE][0], tw,
                                                        contract)
@@ -330,6 +362,15 @@ def main():
         raise SystemExit(f'spectator template: {sinfo["nodes"]} nodes, +{spect_growth} bytes; the HUD tower: '
                          f'{nnodes} nodes, +{hud_growth} bytes. More than twice: stopped')
     sinfo.update(scene=ssinfo, stock_hashes=shashes, growth=spect_growth, hud_nodes=nnodes, hud_growth=hud_growth)
+
+    # no leaf of the contract shares a djb2 hash with another view-model name of the built templates, the halo's
+    # templates or the stock templates they come from (in game such names are one node: rows moved by themselves)
+    blobs = [template, sui, halo_tmpl, halo_spect, stock[TEMPLATE][0], sstock[T.SPECT_UI][0]]
+    if not a.no_replay:
+        blobs += [rui, rstock[T.REPLAY_UI][0]]
+    vm_names, vm_stock_groups = T.check_vm_hashes(contract, blobs)
+    print(f'view-model name hashes: {vm_names} names under view_model_data / ui_menu_data in the contract and '
+          f'{len(blobs)} templates, no addon name shares a djb2 hash ({vm_stock_groups} groups of stock names alone)')
 
     # cross-check against the DLL's own leaf list
     if a.tower_leaves:
@@ -341,16 +382,25 @@ def main():
         diff = sorted(k for k in set(dll) ^ set(contract))
         if diff:
             raise SystemExit(f'leaves.md and tower_leaves.txt differ: {diff[:8]}')
-        print(f'DLL leaf list: {len(dll)} leaves, every bound tower leaf in it with the same type')
+        # the leaves the animation decisions read (the same in all three templates), each a DLL bool
+        bad = [db for db in tw.anim_leaves if dll.get(db) != 'bool']
+        if bad:
+            raise SystemExit(f'animation decisions read leaves the DLL does not write as bool: {bad[:6]}')
+        print(f'DLL leaf list: {len(dll)} leaves, every bound tower leaf in it with the same type; '
+              f'{len(tw.anim_leaves)} animation decision leaves, each a DLL bool')
 
     erp_dir = os.path.join(a.addon, 'erp')
     sa = E.Archive(race)
     sa.add(T.STACKED, 'UILayout', [stacked])
     sa.add(T.CAP, 'UILayout', [cap])
+    sa.add(T.LAPC, 'UILayout', [lapc_scene])
     sa.add(T.STACKED_UIPRE, 'UIPR', [uipre])
     for n in BN.SCENES:
         sa.add(n, 'UILayout', [banner[n]])
     sa.add(BN.RC_TEXT_CLIP, 'AnimClip', rc_clip)
+    sa.add(T.CAP_STRTAB, 'ACStringTable', [anim_strtab])
+    for nm, (temp, syst) in anim_clips.items():
+        sa.add(f'{T.CAP}/{nm}?context=animation', 'AnimClip', [temp, syst])
     for n, t, fr in res + TR.banner_resources(BN.SLOTS):
         sa.add(n, t, fr)
     scene_erp = os.path.join(erp_dir, 'tower_scene.erp')
@@ -387,8 +437,11 @@ def main():
     # read everything back
     back = E.read_all(scene_erp)
     assert back[T.STACKED][1][0] == stacked and back[T.CAP][1][0] == cap and back[T.STACKED_UIPRE][1][0] == uipre
+    assert back[T.LAPC][1][0] == lapc_scene
     assert all(back[n][1][0] == banner[n] for n in BN.SCENES)
     assert list(back[BN.RC_TEXT_CLIP][1]) == rc_clip
+    assert back[T.CAP_STRTAB][1][0] == anim_strtab
+    assert all(list(back[f'{T.CAP}/{nm}?context=animation'][1]) == list(c) for nm, c in anim_clips.items())
     assert len(back) == len(sa.res)
     assert E.read_all(tmpl_erp)[TEMPLATE][1][0] == template
     assert E.read_all(os.path.join(erp_dir, 'halo_template.erp'))[TEMPLATE][1][0] == halo_tmpl
@@ -403,7 +456,8 @@ def main():
     assert [o['source'] for o in json.load(open(ops_path))['ops']] == HALO_SOURCES + [o['source'] for o in new_ops]
 
     for name, data in (('driver_position_table_stacked.idf', stacked), ('driver_position_bottom_cap.idf', cap),
-                       ('driver_position_table_stacked.uipre', uipre), ('hud_dynamic_templates.ui', template)):
+                       ('driver_position_table_stacked.uipre', uipre), ('hud_dynamic_templates.ui', template),
+                       ('lap_counter.idf', lapc_scene)):
         open(os.path.join(a.work, name), 'wb').write(data)
     if not a.no_replay:
         os.makedirs(os.path.join(a.work, 'replay'), exist_ok=True)
@@ -421,7 +475,8 @@ def main():
     json.dump({'contract': T.CONTRACT_VERSION, 'bindings': [list(b) for b in bindings + rbindings + sbindings],
                'hud_bindings': len(bindings), 'replay_bindings': len(rbindings),
                'spectator_bindings': len(sbindings), 'recs': tw.recs,
-               'trial_recs': tw.trecs, 'trial': tw.trial_info,
+               'trial_recs': tw.trecs, 'trial': tw.trial_info, 'anim': tw.anim_info,
+               'anim_leaves': tw.anim_leaves, 'anim_clips': sorted(anim_clips), 'body': tw.body_info,
                'debug_dropzone': a.debug_dropzone}, open(os.path.join(a.work, 'tower_info.json'), 'w'), indent=1)
     json.dump({'on': tw.pv_on, 'texts': tw.pv_text, 'uipre_texts': pv_texts},
               open(os.path.join(a.work, 'preview.json'), 'w'), indent=1)
@@ -436,7 +491,9 @@ def main():
     print(f'stacked table {len(stock[T.STACKED][0])} -> {len(stacked)} bytes (+ {T.HOST}); '
           f'uipre {len(stock[T.STACKED_UIPRE][0])} -> {len(uipre)} bytes, {nset} new preview elements')
     print(f'template {len(halo_tmpl)} -> {len(template)} bytes, {nnodes} tower nodes, {len(bindings)} bindings '
-          f'({nleaf} DLL leaves), every type checked; lap counter: {nlapc} parts hidden while hud_tt_show')
+          f'({nleaf} DLL leaves), every type checked; lap counter hidden while hud_tt_show: {nlapc[0]} stock parts '
+          f'and {nlapc[1]} panel wrappers by tower nodes, no stock node on any of them, every drawn part covered; '
+          f'flag message hidden by one tower node on {T.FLAGM_PART} ({nflag} drawn elements in it, no stock node on it)')
     nlogo = sum(1 for r in tw.recs if r.get('tex') and r['tex'][0] != T.SERIES)
     print(f'team logos: {nlogo} references of the stock logo unit, {meta["G"]["badgeH"]:.2f} HUD units square '
           f'(stock pill: {tw.B.logo_side / T.KT:.2f}), textureOverride bound as {T.BADGE_TAG} (the stock pill\'s tag), '
@@ -460,6 +517,18 @@ def main():
     print(f'Time Trial board: tt_trial ({tcount} elements), {ti["nodes"]} template nodes, {len(tw.trecs)} recs, {ti["decisions"]} decision nodes '
           f'({ti["signals"]} signals) on {", ".join(ti["values"][:2])}, ...; {len(tb)} bindings to the game\'s board, lap '
           f'counter and HUD menu values, each with the stock tag; host, mask and lap counter on hud_tt_show')
+    ai = tw.anim_info
+    print(f'animations: {len(anim_clips)} anim nulls with their clips (translation keys {anim_keyinfo["keys"]}, '
+          f'linear error at most {anim_keyinfo["err_rows"]:.5f} row pitches, '
+          f'row pitch {T.KT * meta["G"]["p"]:.5f} scene units), the cap string table {len(stock[T.CAP_STRTAB][0])} -> '
+          f'{len(anim_strtab)} bytes; per template {ai["host_nodes"]} UIXA / UIMO nodes, {ai["decisions"]} decision '
+          f'nodes, {ai["signals"]} signals, trigger {ai["trigger"]} / untrigger {ai["untrigger"]} (read back: '
+          f'{ai["readback_signals"]} signals by path and id)')
+    bi = tw.body_info
+    print(f'flag cards: cards and rows in a clipped body (tt_clip {bi["window_p"]} p from the band\'s bottom edge, '
+          f'rows to {bi["rows_bottom_p"]} p), moved by tt_xin / tt_xout; card heights {bi["card_heights_p"]} p = the '
+          f'clips\' start offsets; {bi["drawn_parts"]} drawn parts inside the window; the exit\'s copies: '
+          f'{bi["copy_parts"]} parts, each its card\'s one card height up, reading only the copy leaves')
     print(f'banner: {len(BN.SCENES)} toast scenes restyled (scale {BN.S:.4f}, {len(BN.SLOTS)} fill slots -> bn_m, '
           f'{len(BN.TWIN)} clip-free fill twins, {nhide} toast template hide nodes in {len(BN.TOASTS)} instances)')
     if not a.no_replay:
@@ -486,6 +555,9 @@ def main():
           f'({sinfo["tower_nodes"]} under tt_host_n), {len(sbindings)} bindings ({sinfo["dll_leaves"]} DLL leaves; '
           f'screen view model: {", ".join(sinfo["screen_vm"])}), every type checked; no stock visible on the hidden '
           f'or shown parts ({sinfo["stock_visible_nodes"]} stock visible nodes)')
+    print(f'spectator flag message: hidden while hud_tt_on by one tower node on {T.FLAGM_PART} under '
+          f'{T.SPECT_FLAGM_MSG.split(".", 1)[1]} ({sflag} drawn elements in it, {sflag_nodes} stock nodes beside it, no '
+          f'stock node on it, the screen scene\'s only reference to the scene)')
     for arch, hs in shashes.items():
         print(f'  stock {arch}: ' + ', '.join(f'{n.split("/")[-1]} {h[:16]}' for n, h in hs.items()))
     print(f'{spect_erp}: {size5} bytes')

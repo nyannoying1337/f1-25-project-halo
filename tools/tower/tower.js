@@ -7,8 +7,11 @@
    Game-texture slots are drawn as labelled placeholders, never as artwork: F1 logo, FIA badge, team badges
    (no F1 or team artwork is shipped; the game supplies these textures).
 
-   Font: Saira (SIL OFL, saira.ttf + saira-OFL.txt next to this file) stands in for the broadcast "Formula1"
-   family. Weights and horizontal scales were fitted to the measured text widths (fit_font.py -> fontfit.json).
+   Font: Saira (SIL OFL 1.1, saira.ttf + saira-OFL.txt next to this file) stands in for the broadcast's typeface,
+   drawn through its own axes only: weight, width, size, tracking and alignment. The polish pass (2026-11-11)
+   removed the per-group horizontal scales and digit cells fitted to the broadcast face (fit_font.py ->
+   fontfit.json, kept as a record) and the slash drawn through '0'. The flag words baked into sprites
+   (G.status *Sx, export_tower.js) are a separate matter: see docs/timing-tower/ui-build.md section 24.
 
    API
      TOWER.draw(ctx, state, opt) -> layout     draw a tower at the current transform (HUD units)
@@ -54,13 +57,13 @@
     logo: { x: 1.485 * p, y: (2.313 - 1.885) * p, w: 3.30 * p, h: 0.837 * p },   // F1 logo slot
     fia: { x: 1.50 * p, y: (2.313 - 0.89) * p, w: 3.30 * p, h: 0.48 * p },       // FIA badge line slot
     sessBase: 0.78 * p,                   // session text baseline below the separator
-    sess: {                               // session line pieces: cap (p), weight, sx, tabular digit cell (caps)
-      lapWord: { cap: 0.393, wt: 300, sx: 1.12 },
-      lapNum: { cap: 0.495, wt: 700, dig: 0.98 },
-      slash: { cap: 0.424, wt: 300, sx: 0.70 },
-      laps: { cap: 0.375, wt: 300, dig: 0.89 },
-      label: { cap: 0.44, wt: 400, sx: 1.02 },        // 'Q2', 'P3'
-      clock: { cap: 0.445, wt: 700, dig: 0.89 },      // '1:46', '7:42'
+    sess: {                               // session line pieces: cap (p), weight; numbers in tabular cells (tabular)
+      lapWord: { cap: 0.393, wt: 300 },
+      lapNum: { cap: 0.495, wt: 700 },
+      slash: { cap: 0.424, wt: 300 },
+      laps: { cap: 0.375, wt: 300 },
+      label: { cap: 0.44, wt: 400 },                  // 'Q2', 'P3'
+      clock: { cap: 0.445, wt: 700 },                 // '1:46', '7:42'
       gap1: 0.22, gap2: 0.22, gap3: 0.146, gapT: 0.235,
     },
     // rows, y from the row cell top
@@ -69,11 +72,10 @@
     posX: 0.461 * p, posCap: 0.369 * p,
     arrow: { x: 0.446 * p, w: 0.44 * p, h: 0.33 * p, dyUp: 0.017 * p, dyDown: -0.02 * p },
     badgeX: 1.382 * p, badgeW: 0.843 * p, badgeH: 0.652 * p,     // team badge slot (max logo extent)
-    codeX: 1.986 * p, codeCap: 0.389 * p, codeWt: 650, codeSx: 1.142,
-    num: {
+    codeX: 1.986 * p, codeCap: 0.389 * p, codeWt: 650,
+    num: {                                // gap column: right edge r, cap height (tabular figures: tabular below)
       race: { r: 5.446 * p, cap: 0.428 * p },
       timed: { r: 5.545 * p, cap: 0.383 * p },
-      dig: 0.785, punct: 0.356, sx: 0.95, ink: 0.70,      // tabular cells in caps
     },
     labelCap: { race: 0.39 * p, timed: 0.383 * p }, labelSx: 1.0,         // Interval 0.99, No Time 0.98, Out Lap 1.03
     tyreX: 5.922 * p, tyreCap: 0.352 * p,
@@ -81,17 +83,23 @@
     stripSepH: 0.5,                       // strip separators: 1-2 px at 1080p
     hatch: { period: 0.072 * p, angle: 49.5 },              // knockout zone, '/' stripes
     status: {
-      slots: { yellow: 2, red: 2, sc: 2, vsc: 2, chequered: 1 },
-      barCap: 0.497, barWt: 800, barSx: 1.165,              // YELLOW FLAG
-      hazCap: 0.429, hazWt: 300, hazSx: 1.0,                // TRACK HAZARD
-      redCap: 0.50, redWt: 700, redSx: 1.13,                // RED FLAG
-      stopCap: 0.455, stopWt: 400, stopSx: 0.95,            // SESSION STOPPED
-      sc: { fx0: 0.265, fx1: 2.355, fy0: 0.336, fy1: 1.756, tx: 2.597, l1: [0.474, 0.989], l2: [1.137, 1.652], wt: 800, sx: 1.2 },
+      slots: { yellow: 2, red: 2, sc: 2, vsc: 2.5, chequered: 1 },   // VSC 2.50 p (the broadcast reference)
+      // *Fit: the word's ink width as a multiple of Saira's normal-width ink (the measured widths); reached
+      // with Saira's width axis plus tracking (text() `fit`), no longer by stretching the glyphs sideways
+      barCap: 0.497, barWt: 800, barFit: 1.165,             // YELLOW FLAG
+      hazCap: 0.429, hazWt: 300, hazFit: 1.0,               // TRACK HAZARD
+      redCap: 0.50, redWt: 700, redFit: 1.13,               // RED FLAG
+      stopCap: 0.455, stopWt: 400, stopFit: 0.95,           // SESSION STOPPED
+      sc: { fx0: 0.265, fx1: 2.355, fy0: 0.336, fy1: 1.756, tx: 2.597, l1: [0.474, 0.989], l2: [1.137, 1.652], wt: 800, fit: 1.2,
+            // VSC (the broadcast reference: box 2.50 p, three lines, text cap about 0.5 p as SC): the SC box's cap and line
+            // pitch, the block placed as the SC box places its two lines (top : bottom margin the same ratio); the FIA
+            // badge as in the SC box, moved down by vscDy so it stays centred in the taller box
+            vscH: 2.5, vscB: [0.895, 1.558, 2.221], vscDy: 0.25 },
     },
     banner: {                             // FIA RACE CONTROL banner, measured in banner px, k = HUD per px
       hPx: 62.4, k: 1.693 * p / 62.4,     // height 1.693 p ASSUMES the banner crop has the c5/q2 scale
       fia: [25.5, 88.5, 12.52, 55.69], t1x: 123.5, base: 41.3, cap1: 16.45, cap2: 15.03, padR: 19.5,
-      gapWord1: 6, gapPhrase: 12, gapWord2: 8, wt1: 700, sx1: 1.045, wt2: 300, sx2: 1.06,
+      gapWord1: 6, gapPhrase: 12, gapWord2: 8, wt1: 700, wt2: 300,
     },
   };
 
@@ -108,7 +116,7 @@
   G.barBadgeX = (G.strip + G.bar.w + G.codeX) / 2;
 
   // The game's code style (OSD_24_bold) as the game draws it today, measured on in-game tower screenshots
-  // (2026-11-09, 39 codes; J K Y Z from his replay-board screenshot of full surnames): cap 0.423 p, and per letter
+  // (2026-11-09, 39 codes; J K Y Z from a replay-board screenshot of full surnames): cap 0.423 p, and per letter
   // [ink width, left bearing, right bearing] in caps. Word ink width = cap x (inks + the bearings between letters).
   // Surnames are drawn at this width, so the renders show the game's fit, not Saira's.
   const GAME_CODE = {
@@ -161,6 +169,26 @@
 
   function setFont(ctx, wt, cap) { ctx.font = `${wt} ${(cap / CAP_EM * K).toFixed(2)}px ${FONT}`; }
 
+  // Saira's width axis in the steps a canvas can ask for (font-stretch keywords; the font file covers 50-125 %)
+  const STRETCH = ['ultra-condensed', 'extra-condensed', 'condensed', 'semi-condensed', 'normal', 'semi-expanded', 'expanded'];
+  // fit: reach `fit` x the normal-width ink of s with Saira's own axes, not an x-scale: the widest width step
+  // whose ink stays within it, then tracking (letter spacing, HUD units) for the rest. Measured at the same weight and
+  // size, once per call (sprite export and previews only; nothing here runs in the game).
+  function fitStyle(ctx, s, cap, wt, fit) {
+    ctx.save(); setFont(ctx, wt, cap);
+    const n0 = inkOf(ctx, s), want = (n0.l + n0.r) * fit;
+    let best = null;
+    for (const kw of STRETCH) {
+      ctx.fontStretch = kw;
+      const m = inkOf(ctx, s), w = m.l + m.r;
+      if (best && w > want + 1e-6) break;
+      best = { stretch: kw, w, l: m.l };
+    }
+    ctx.restore();
+    const n = [...s].length;
+    return { stretch: best.stretch, ls: n > 1 ? Math.max(0, want - best.w) / (n - 1) : 0, w: Math.max(want, best.w), l: best.l };
+  }
+
   function inkOf(ctx, s) {
     const m = ctx.measureText(s);
     return { l: m.actualBoundingBoxLeft / K, r: m.actualBoundingBoxRight / K, adv: m.width / K };
@@ -169,6 +197,7 @@
   // draw s with its ink box aligned at x: align 'left' (ink left), 'right' (ink right), 'center' (ink centre)
   function text(ctx, s, x, base, cap, o) {
     o = o || {};
+    if (o.fit) return fitText(ctx, s, x, base, cap, o);
     const sx = o.sx || 1;
     ctx.save();
     setFont(ctx, o.wt || 400, cap);
@@ -183,28 +212,48 @@
     return w;
   }
 
+  // text() with o.fit: Saira's width step and tracking from fitStyle, the ink aligned as text() aligns it
+  function fitText(ctx, s, x, base, cap, o) {
+    const f = fitStyle(ctx, s, cap, o.wt || 400, o.fit), w = f.w;
+    ctx.save();
+    setFont(ctx, o.wt || 400, cap); ctx.fontStretch = f.stretch; ctx.letterSpacing = `${(f.ls * K).toFixed(3)}px`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    const x0 = o.align === 'right' ? x - w : o.align === 'center' ? x - w / 2 : x;
+    ctx.translate(x0, base); ctx.scale(1 / K, 1 / K);
+    ctx.fillStyle = o.color || '#fff';
+    if (o.alpha !== undefined) ctx.globalAlpha *= o.alpha;
+    ctx.fillText(s, f.l * K, 0);
+    ctx.restore();
+    return w;
+  }
+
   function textWidth(ctx, s, cap, wt, sx) {
     ctx.save(); setFont(ctx, wt, cap); const m = inkOf(ctx, s); ctx.restore();
     return (m.l + m.r) * (sx || 1);
   }
 
-  // tabular figures: digits and '+' in cells of dig caps, '.' ':' in punct caps; returns ink width
-  function cells(s, cap, dig, punct) {
-    return [...s].map(ch => (/[0-9+\-−]/.test(ch) ? dig : /[.:]/.test(ch) ? punct : 0.6) * cap);
+  // tabular figures in Saira's own metrics (what its tnum figures do; canvas cannot switch the feature on): each
+  // digit, '+' and '-' centred in a cell as wide as Saira's widest digit at this weight and size, any other character
+  // at its own advance. Right-aligned: the last cell ends at xr. Returns the width.
+  function cells(ctx, s, cap, wt) {
+    ctx.save(); setFont(ctx, wt, cap);
+    const dig = Math.max(...[...'0123456789'].map(d => inkOf(ctx, d).adv));
+    const out = [...s].map(ch => (/[0-9+\-−]/.test(ch) ? dig : inkOf(ctx, ch).adv));
+    ctx.restore();
+    return out;
   }
   function tabular(ctx, s, xr, base, cap, o) {
     o = o || {};
-    const dig = o.dig || G.num.dig, punct = o.punct || G.num.punct, sx = o.sx || G.num.sx;
-    const cw = cells(s, cap, dig, punct);
-    let x = xr + 0.5 * (dig - G.num.ink) * cap;        // right edge of the last cell
+    const wt = o.wt || 400, cw = cells(ctx, s, cap, wt);
+    let x = xr;
     for (let i = s.length - 1; i >= 0; i--) {
-      text(ctx, s[i], x - cw[i] / 2, base, cap, { wt: o.wt || 400, sx, align: 'center', color: o.color, alpha: o.alpha });
+      text(ctx, s[i], x - cw[i] / 2, base, cap, { wt, align: 'center', color: o.color, alpha: o.alpha });
       x -= cw[i];
     }
-    return xr - x - 0.5 * (dig - G.num.ink) * cap;
+    return xr - x;
   }
-  function tabularWidth(s, cap, dig, punct) {
-    return cells(s, cap, dig, punct || G.num.punct).reduce((a, b) => a + b, 0) - (dig - G.num.ink) * cap;
+  function tabularWidth(ctx, s, cap, wt) {
+    return cells(ctx, s, cap, wt).reduce((a, b) => a + b, 0);
   }
 
   // ---------------------------------------------------------------- small parts
@@ -248,20 +297,9 @@
     rect(ctx, xc - len / 2, ymid - 0.03 * p, len, 0.06 * p, P.na);
   }
 
-  // position number, centred; '0' gets the slash the broadcast (and the game's OSD font) use
+  // position number, centred (a live text in game: Saira's own '0' here, no slash drawn through it)
   function position(ctx, s, cx, base, cap, color, alpha) {
-    const w = text(ctx, s, cx, base, cap, { wt: 400, align: 'center', color, alpha });
-    if (s.includes('0')) {
-      // the slash: through the last zero, lower-left to upper-right
-      ctx.save();
-      setFont(ctx, 400, cap);
-      const z = inkOf(ctx, '0');
-      const zw = (z.l + z.r), zc = cx + w / 2 - zw / 2;
-      ctx.strokeStyle = color; ctx.globalAlpha *= (alpha === undefined ? 1 : alpha);
-      ctx.lineWidth = 0.13 * cap; ctx.lineCap = 'butt';
-      ctx.beginPath(); ctx.moveTo(zc - 0.24 * zw, base - 0.14 * cap); ctx.lineTo(zc + 0.24 * zw, base - 0.86 * cap); ctx.stroke();
-      ctx.restore();
-    }
+    text(ctx, s, cx, base, cap, { wt: 400, align: 'center', color, alpha });
   }
 
   // ---------------------------------------------------------------- layout
@@ -339,7 +377,7 @@
     for (const q of parts) {
       if (q.gap !== undefined) { q.w = q.gap * p; } else {
         q.capH = q.cap * p;
-        q.w = q.tab ? tabularWidth(q.s, q.capH, q.dig) : textWidth(ctx, q.s, q.capH, q.wt, q.sx);
+        q.w = q.tab ? tabularWidth(ctx, q.s, q.capH, q.wt) : textWidth(ctx, q.s, q.capH, q.wt);
       }
       total += q.w;
     }
@@ -347,8 +385,8 @@
     for (const q of parts) {
       if (q.gap === undefined) {
         const color = q.na ? P.na : P.sess;
-        if (q.tab) tabular(ctx, q.s, x + q.w, base, q.capH, { dig: q.dig, wt: q.wt, sx: 1, color });
-        else text(ctx, q.s, x, base, q.capH, { wt: q.wt, sx: q.sx, color });
+        if (q.tab) tabular(ctx, q.s, x + q.w, base, q.capH, { wt: q.wt, color });
+        else text(ctx, q.s, x, base, q.capH, { wt: q.wt, color });
       }
       x += q.w;
     }
@@ -356,37 +394,36 @@
 
   function drawStatus(ctx, st, L, opt) {
     const W = L.w, y = L.rowsTop, S = G.status, dx = L.g.dW / 2;
-    const line2 = (txt, cap, wt, sx, color) => {
+    const line2 = (txt, cap, wt, fit, color) => {
       rect(ctx, 0, y + p, W, p, P.darkBand);
-      text(ctx, txt, W / 2, y + p + G.mid + cap * p / 2, cap * p, { wt, sx, align: 'center', color });
+      text(ctx, txt, W / 2, y + p + G.mid + cap * p / 2, cap * p, { wt, fit, align: 'center', color });
     };
     if (st.status === 'yellow') {
       rect(ctx, 0, y, W, 1.005 * p, P.yellow);
-      text(ctx, 'YELLOW FLAG', W / 2, y + G.mid + S.barCap * p / 2, S.barCap * p, { wt: S.barWt, sx: S.barSx, align: 'center', color: P.yellowText });
-      line2(st.statusText || 'TRACK HAZARD', S.hazCap, S.hazWt, S.hazSx, P.hazard);
+      text(ctx, 'YELLOW FLAG', W / 2, y + G.mid + S.barCap * p / 2, S.barCap * p, { wt: S.barWt, fit: S.barFit, align: 'center', color: P.yellowText });
+      line2(st.statusText || 'TRACK HAZARD', S.hazCap, S.hazWt, S.hazFit, P.hazard);
     } else if (st.status === 'red') {
       rect(ctx, 0, y, W, 1.032 * p, P.red);
-      text(ctx, 'RED FLAG', W / 2, y + G.mid + S.redCap * p / 2, S.redCap * p, { wt: S.redWt, sx: S.redSx, align: 'center', color: P.redFlagText });
-      line2(st.statusText || 'SESSION STOPPED', S.stopCap, S.stopWt, S.stopSx, P.stopped);
+      text(ctx, 'RED FLAG', W / 2, y + G.mid + S.redCap * p / 2, S.redCap * p, { wt: S.redWt, fit: S.redFit, align: 'center', color: P.redFlagText });
+      line2(st.statusText || 'SESSION STOPPED', S.stopCap, S.stopWt, S.stopFit, P.stopped);
     } else if (st.status === 'sc' || st.status === 'vsc') {
-      const c = S.sc;
-      rect(ctx, 0, y, W, 1.998 * p, P.sc);
-      slot(ctx, c.fx0 * p + dx, y + c.fy0 * p, (c.fx1 - c.fx0) * p, (c.fy1 - c.fy0) * p, 'FIA', 0.3 * p, Object.assign({}, opt, { alpha: 0.9 }));
+      const c = S.sc, vsc = st.status === 'vsc', dy = vsc ? c.vscDy * p : 0;
+      rect(ctx, 0, y, W, ((vsc ? c.vscH : 2) - 0.002) * p, P.sc);
+      slot(ctx, c.fx0 * p + dx, y + c.fy0 * p + dy, (c.fx1 - c.fx0) * p, (c.fy1 - c.fy0) * p, 'FIA', 0.3 * p, Object.assign({}, opt, { alpha: 0.9 }));
       if (st.status === 'sc') {
         const cap = (c.l1[1] - c.l1[0]) * p;
-        text(ctx, 'SAFETY', c.tx * p + dx, y + c.l1[1] * p, cap, { wt: c.wt, sx: c.sx, color: '#000' });
-        text(ctx, 'CAR', c.tx * p + dx, y + c.l2[1] * p, cap, { wt: c.wt, sx: c.sx, color: '#000' });
+        text(ctx, 'SAFETY', c.tx * p + dx, y + c.l1[1] * p, cap, { wt: c.wt, fit: c.fit, color: '#000' });
+        text(ctx, 'CAR', c.tx * p + dx, y + c.l2[1] * p, cap, { wt: c.wt, fit: c.fit, color: '#000' });
       } else {
-        // VSC: no reference - inferred from the SC box (three lines in the same text block)
-        const cap = 0.34 * p, x = c.tx * p + dx;
-        text(ctx, 'VIRTUAL', x, y + 0.62 * p, cap, { wt: c.wt, sx: 1.05, color: '#000' });
-        text(ctx, 'SAFETY', x, y + 1.15 * p, cap, { wt: c.wt, sx: 1.05, color: '#000' });
-        text(ctx, 'CAR', x, y + 1.68 * p, cap, { wt: c.wt, sx: 1.05, color: '#000' });
+        // VSC (the broadcast reference): three lines at the SC box's text size in a 2.50 p box (before: 2.00 p, cap 0.34 p)
+        const cap = (c.l1[1] - c.l1[0]) * p, x = c.tx * p + dx;
+        ['VIRTUAL', 'SAFETY', 'CAR'].forEach((w, i) => text(ctx, w, x, y + c.vscB[i] * p, cap, { wt: c.wt, fit: c.fit, color: '#000' }));
       }
     } else if (st.status === 'chequered') {
       // no reference - inferred: chequer band behind a dark label box
-      const sq = 0.25 * p;
-      for (let i = 0; i * sq < W; i++) for (let j = 0; j < 4; j++) rect(ctx, i * sq, y + j * sq, sq, sq, (i + j) % 2 ? '#111' : '#EEE');
+      // a whole number of columns across the panel (no sliver at the right edge; export_tower.js 'chq')
+      const sq = 0.25 * p, n = Math.round(W / sq), sx = W / n;
+      for (let i = 0; i < n; i++) for (let j = 0; j < 4; j++) rect(ctx, i * sx, y + j * sq, sx, sq, (i + j) % 2 ? '#111' : '#EEE');
       const tw = textWidth(ctx, 'CHEQUERED FLAG', 0.40 * p, 700, 1.0) + 0.5 * p;
       rect(ctx, W / 2 - tw / 2, y + 0.12 * p, tw, 0.76 * p, P.darkBand);
       text(ctx, 'CHEQUERED FLAG', W / 2, y + G.mid + 0.2 * p, 0.40 * p, { wt: 700, align: 'center', color: P.sess });
@@ -457,7 +494,7 @@
       // code, or the full surname (names mode 'surname')
       let nameW = null, want = 0;
       if (g.sur) ({ w: nameW, want } = surname(ctx, r.name || r.code, G.codeX, mid + G.codeCap / 2, g.nameBox, a, r.run));
-      else text(ctx, r.code, G.codeX, mid + G.codeCap / 2, G.codeCap, { wt: G.codeWt, sx: G.codeSx, color: P.code, alpha: a });
+      else text(ctx, r.code, G.codeX, mid + G.codeCap / 2, G.codeCap, { wt: G.codeWt, color: P.code, alpha: a });
       if (opt.guides) guides(ctx, g, num, mid, g.sur ? want : gameWidth(r.code));
       // gap / interval / lap time / label
       if (r.gap === null || r.gap === undefined) {
@@ -466,7 +503,7 @@
         tabular(ctx, r.gap, num.r, mid + num.cap / 2, num.cap, { color: P.num, alpha: a });
       } else {
         // long labels ('+2 LAPS') squeeze horizontally to keep 0.25 p clear of the code (P1 'Interval' in 'full': ~0.25 p)
-        const room = num.r - (G.codeX + (nameW !== null ? nameW : textWidth(ctx, r.code, G.codeCap, G.codeWt, G.codeSx))) - 0.25 * p;
+        const room = num.r - (G.codeX + (nameW !== null ? nameW : textWidth(ctx, r.code, G.codeCap, G.codeWt))) - 0.25 * p;
         const w = textWidth(ctx, r.gap, labelCap, 400, G.labelSx);
         const sx = w > room ? G.labelSx * room / w : G.labelSx;
         text(ctx, r.gap, num.r, mid + labelCap / 2, labelCap, { wt: 400, sx, align: 'right', color: P.label, alpha: a });
@@ -517,9 +554,9 @@
     const words1 = t1.split(' '), words2 = t2.split(' ');
     let x = B.t1x * k;
     const runs = [];
-    words1.forEach((wd, i) => { const w = textWidth(ctx, wd, cap1, B.wt1, B.sx1); runs.push([wd, x, cap1, B.wt1, B.sx1]); x += w + (i < words1.length - 1 ? B.gapWord1 * k : 0); });
+    words1.forEach((wd, i) => { const w = textWidth(ctx, wd, cap1, B.wt1); runs.push([wd, x, cap1, B.wt1, 1]); x += w + (i < words1.length - 1 ? B.gapWord1 * k : 0); });
     x += B.gapPhrase * k;
-    words2.forEach((wd, i) => { const w = textWidth(ctx, wd, cap2, B.wt2, B.sx2); runs.push([wd, x, cap2, B.wt2, B.sx2]); x += w + (i < words2.length - 1 ? B.gapWord2 * k : 0); });
+    words2.forEach((wd, i) => { const w = textWidth(ctx, wd, cap2, B.wt2); runs.push([wd, x, cap2, B.wt2, 1]); x += w + (i < words2.length - 1 ? B.gapWord2 * k : 0); });
     const W = x + B.padR * k;
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, P.banner[0]); g.addColorStop(1, P.banner[1]);

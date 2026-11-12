@@ -1004,7 +1004,7 @@ def energy_checks(rep, c, live, fresh):
 TOWER_FIELDS = ('Tower: systems found', 'Tower: classification (results R)', 'Tower: gaps and intervals',
                 'Tower: tyres', 'Tower: safety car', 'Tower: penalties', 'Tower: warnings', 'Tower: shown values',
                 'Tower: cost', 'Tower: yellow flag', 'Tower: red flag', 'Tower: team badges')
-TOWER_CARS = 24
+TOWER_CARS = 30
 RACE_TYPES = (15, 16, 17)
 VISUAL_OF = {3: 16, 4: 17, 5: 18, 7: 7, 8: 8}       # compound enum -> the game's visual id (field-traces.md §1)
 LETTER_OF = {3: 'S', 4: 'M', 5: 'H', 7: 'I', 8: 'W'}
@@ -1820,7 +1820,7 @@ def tower_shown(rep, T):
             want_start = min(max(pidx - rows // 2, 0), count - rows)
         else:
             want_start = 0
-        if len(toks) != rows or start != want_start or (mode == 0 and rows != min(count, 22)):
+        if len(toks) != rows or start != want_start or (mode == 0 and rows != min(count, 30)):
             window_bad += 1
             if len(examples) < 5:
                 examples.append(f'{T.t[i]:.1f} s: window start {start} rows {rows} ({len(toks)} shown), want start {want_start}')

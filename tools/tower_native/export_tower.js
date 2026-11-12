@@ -101,6 +101,12 @@
     const row = [-0.5, -0.5, W + 0.5, p + 0.5];
     job('up', () => padded('up', row, g => triangle(g, G.arrow.x, G.mid + G.arrow.dyUp, G.arrow.w, G.arrow.h, true, P.up)));
     job('dn', () => padded('dn', row, g => triangle(g, G.arrow.x, G.mid + G.arrow.dyDown, G.arrow.w, G.arrow.h, false, P.down)));
+    // the spectator's Detail Position Change: the places gained / lost triangle beside the count (the arrows'
+    // shape and colours, smaller). Exact: its box is the triangle's, so the cell's stacker lays it out by its own
+    // width (tower_native.py DET_ARROW: the same 0.14 x 0.105 p)
+    const pcw = 0.14 * p, pch = 0.105 * p;
+    job('pcu', () => exact('pcu', [0, 0, pcw, pch], g => triangle(g, pcw / 2, pch / 2, pcw * 0.95, pch * 0.95, true, P.up)));
+    job('pcd', () => exact('pcd', [0, 0, pcw, pch], g => triangle(g, pcw / 2, pch / 2, pcw * 0.95, pch * 0.95, false, P.down)));
     for (const L of ['S', 'M', 'H', 'I', 'W'])
       job('ty_' + L, () => padded('ty_' + L, row, g => T.text(g, L, G.tyreX, G.mid + G.tyreCap / 2, G.tyreCap, { wt: 500, align: 'center', color: P.tyre[L] })));
 
@@ -117,19 +123,21 @@
     job('sc', () => exact('sc', [0, 0, W, 2 * p], g => {
       rect(g, 0, 0, W, 1.998 * p, P.sc);
       const cap = (SC.l1[1] - SC.l1[0]) * p;
-      T.text(g, 'SAFETY', SC.tx * p, SC.l1[1] * p, cap, { wt: SC.wt, sx: SC.sx, color: '#000' });
-      T.text(g, 'CAR', SC.tx * p, SC.l2[1] * p, cap, { wt: SC.wt, sx: SC.sx, color: '#000' });
+      T.text(g, 'SAFETY', SC.tx * p, SC.l1[1] * p, cap, { wt: SC.wt, fit: SC.fit, color: '#000' });
+      T.text(g, 'CAR', SC.tx * p, SC.l2[1] * p, cap, { wt: SC.wt, fit: SC.fit, color: '#000' });
     }));
-    job('vsc', () => exact('vsc', [0, 0, W, 2 * p], g => {
-      rect(g, 0, 0, W, 1.998 * p, P.sc);
-      const cap = 0.34 * p, x = SC.tx * p;
-      T.text(g, 'VIRTUAL', x, 0.62 * p, cap, { wt: SC.wt, sx: 1.05, color: '#000' });
-      T.text(g, 'SAFETY', x, 1.15 * p, cap, { wt: SC.wt, sx: 1.05, color: '#000' });
-      T.text(g, 'CAR', x, 1.68 * p, cap, { wt: SC.wt, sx: 1.05, color: '#000' });
+    // the broadcast reference: the VSC block 2.50 p (the rows below move down by the stacker, as under every block),
+    // three lines at the SC box's text size and pitch (tower.js S.sc.vscB); before: 2.00 p, cap 0.34 p
+    job('vsc', () => exact('vsc', [0, 0, W, SC.vscH * p], g => {
+      rect(g, 0, 0, W, (SC.vscH - 0.002) * p, P.sc);
+      const cap = (SC.l1[1] - SC.l1[0]) * p, x = SC.tx * p;
+      ['VIRTUAL', 'SAFETY', 'CAR'].forEach((w, i) => T.text(g, w, x, SC.vscB[i] * p, cap, { wt: SC.wt, fit: SC.fit, color: '#000' }));
     }));
     job('chq', () => exact('chq', [0, 0, W, p], g => {
-      const sq = 0.25 * p;
-      for (let i = 0; i * sq < W; i++) for (let j = 0; j < 4; j++) rect(g, i * sq, j * sq, sq, sq, (i + j) % 2 ? '#111' : '#EEE');
+      // a whole number of columns across the panel (26 at the FIX1 width), each 0.2 % wider than tall; an earlier build's
+      // 0.25 p squares left a 0.06-square sliver at the right edge
+      const sq = 0.25 * p, n = Math.round(W / sq), sx = W / n;
+      for (let i = 0; i < n; i++) for (let j = 0; j < 4; j++) rect(g, i * sx, j * sq, sx, sq, (i + j) % 2 ? '#111' : '#EEE');
       g.save(); g.font = `700 ${(0.40 * p / 0.69 * 10).toFixed(2)}px TowerSaira`;
       const m = g.measureText('CHEQUERED FLAG'); g.restore();
       const tw = (m.actualBoundingBoxLeft + m.actualBoundingBoxRight) / 10 + 0.5 * p;
@@ -142,14 +150,14 @@
     // TRACK HAZARD). Red: SESSION STOPPED is baked with the bar, as the drawing.
     job('yel', () => exact('yel', [0, 0, W, 2 * p], g => {
       rect(g, 0, 0, W, 1.005 * p, P.yellow);
-      T.text(g, 'YELLOW FLAG', W / 2, G.mid + S.barCap * p / 2, S.barCap * p, { wt: S.barWt, sx: S.barSx, align: 'center', color: P.yellowText });
+      T.text(g, 'YELLOW FLAG', W / 2, G.mid + S.barCap * p / 2, S.barCap * p, { wt: S.barWt, fit: S.barFit, align: 'center', color: P.yellowText });
       rect(g, 0, p, W, p, P.darkBand);
     }));
     job('red', () => exact('red', [0, 0, W, 2 * p], g => {
       rect(g, 0, 0, W, 1.032 * p, P.red);
-      T.text(g, 'RED FLAG', W / 2, G.mid + S.redCap * p / 2, S.redCap * p, { wt: S.redWt, sx: S.redSx, align: 'center', color: P.redFlagText });
+      T.text(g, 'RED FLAG', W / 2, G.mid + S.redCap * p / 2, S.redCap * p, { wt: S.redWt, fit: S.redFit, align: 'center', color: P.redFlagText });
       rect(g, 0, p, W, p, P.darkBand);
-      T.text(g, 'SESSION STOPPED', W / 2, p + G.mid + S.stopCap * p / 2, S.stopCap * p, { wt: S.stopWt, sx: S.stopSx, align: 'center', color: P.stopped });
+      T.text(g, 'SESSION STOPPED', W / 2, p + G.mid + S.stopCap * p / 2, S.stopCap * p, { wt: S.stopWt, fit: S.stopFit, align: 'center', color: P.stopped });
     }));
 
     // ---- Race Control banner background (banner frame, Decision 6): the game's own toast restyled in place; its

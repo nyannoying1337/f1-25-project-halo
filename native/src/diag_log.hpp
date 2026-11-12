@@ -6,6 +6,7 @@
 #include "game_state.hpp"
 #include "game_state_f1_25.hpp"
 #include "hud_model.hpp"
+#include "tower_anim.hpp"
 #include "tower_model.hpp"
 
 namespace halo::diag {
@@ -43,6 +44,9 @@ struct TowerRec {
     float read_us, model_us, publish_us; // the tower's own CPU time this frame
     int writes, copies, halo_writes;
     unsigned jobs;
+    tower::AnimStats anim; // the motion packets so far (cumulative) and the snaps since the last record
+    tower::RowEvents started, rowsnaps; // the codes started and the rows' own snaps since the last record
+    tower::HeadEvents hdpub, hdanim;    // the header's writes and its own snaps since the last record
 };
 
 // Start the writer (first call only). Returns false when the folder cannot be created.

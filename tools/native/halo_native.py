@@ -487,6 +487,7 @@ def _halo(B, geo, halo, pv=None, cls=None):
         colours.append(('halo_c_rails', pfx + 'rails'))
     shown('arrow_l', 'arrow_l', leaf('tl'))
     shown('arrow_r', 'arrow_r', leaf('tr'))
+    shown('turn_lbl', 'turn_lbl', leaf('turn'))   # TURN shows with its number (was part of the base)
     if cl is None:
         shown('boost_off', 'boost_off', leaf('boost'), True, parent=std)
         shown('boost_on', 'boost_on', leaf('boost'), parent=std)

@@ -2,10 +2,10 @@
   "schema_version": 1,
   "id": "nick.f1-2026-halo",
   "name": "Project Halo",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "author": "nyannoying",
   "icon": "icons/halo.png",
-  "description": "The 2026 F1 world feed's onboard halo and a broadcast-style timing tower, drawn by F1 25's own HUD in 2026, 2025 and F2 cars: move and resize them in HUD customisation. Read from the running game itself: no UDP telemetry, no companion app.",
+  "description": "The 2026 F1 world feed's onboard halo for 2026, 2025 and F2 cars, an animated broadcast-style timing tower, the Race Control banner and an optional G-force meter, drawn by F1 25's own HUD. Read from the game itself: no UDP telemetry, no companion app.",
   "license": "LicenseRef-Project-Halo-Attribution-1.0",
   "homepage": "https://github.com/nyannoying1337/f1-25-project-halo",
   "repository": "https://github.com/nyannoying1337/f1-25-project-halo",
@@ -131,7 +131,7 @@
       "label": "Position arrows",
       "default": true,
       "binds": "native",
-      "description": "A green or red arrow for 4 seconds when a car gains or loses a place."
+      "description": "A green or red arrow for 3 seconds when a car gains or loses a place."
     },
     {
       "id": "tower_gaps",
@@ -139,7 +139,7 @@
       "label": "Intervals",
       "default": true,
       "binds": "native",
-      "description": "The gap column: times in races (see Gap mode), and PIT, Out, DSQ and NC. Practice and qualifying times are not shown yet."
+      "description": "The gap column: times in races (see Gap mode), and PIT, Out, DSQ and NC. In practice and qualifying, the leader's best lap and every other car's gap to it."
     },
     {
       "id": "tower_gap_mode",
@@ -189,6 +189,14 @@
       "default": true,
       "binds": "native",
       "description": "Your own row a little brighter."
+    },
+    {
+      "id": "tower_animations",
+      "type": "toggle",
+      "label": "Animations",
+      "default": true,
+      "binds": "native",
+      "description": "Broadcast-style motion in the timing tower: rows slide when cars change places, the arrow rides in with its row, and the position number and a new best lap time fade in. Off: every change shows at once."
     }
   ],
   "operations": {

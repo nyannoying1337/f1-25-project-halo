@@ -74,6 +74,62 @@ def solid_colours(P):
     }
 
 
+# The knockout hatch: "/" stripes over the position strip, measured on the reference (measurements.md,
+# knockout hatch): 49.5 degrees from horizontal, period 0.072 p across the stripes, light #4A242C / dark #1F0001, about
+# half each. Drawn here (no art copied): the cell's aspect (strip x p), 4 x 4 samples per pixel, opaque.
+HATCH = {'angle': 49.5, 'period_p': 0.072, 'light': (0x4A, 0x24, 0x2C), 'dark': (0x1F, 0x00, 0x01), 'h': 128}
+
+
+def hatch_image(G):
+    """the knockout hatch sprite for the position strip (G: the export's geometry) -> HxWx4 uint8"""
+    import math
+    p, w_u = G['p'], G['strip']
+    h = HATCH['h']
+    w = int(round(h * w_u / p / 4.0)) * 4                       # the cell's aspect, a multiple of 4 pixels
+    a = math.radians(HATCH['angle'])
+    period = HATCH['period_p'] * p                              # HUD units across the stripes
+    k = 4
+    xs = (np.arange(w * k) + 0.5) / (w * k) * w_u               # sample centres in HUD units, x right
+    ys = (np.arange(h * k) + 0.5) / (h * k) * p                 # y down (image rows: row 0 is the top in game)
+    s = xs[None, :] * math.sin(a) + ys[:, None] * math.cos(a)  # constant along a "/" line
+    light = (np.mod(s / period, 1.0) < 0.5).astype(np.float64)
+    cov = light.reshape(h, k, w, k).mean(axis=(1, 3))
+    lo, hi = np.array(HATCH['dark'], np.float64), np.array(HATCH['light'], np.float64)
+    rgb = lo[None, None, :] + cov[:, :, None] * (hi - lo)[None, None, :]
+    img = np.empty((h, w, 4), np.uint8)
+    img[..., :3] = np.clip(np.round(rgb), 0, 255).astype(np.uint8)
+    img[..., 3] = 255
+    return img
+
+
+def fastest_lap_image(purple, box):
+    """the race's fastest lap side box: a purple box with a white stopwatch, drawn (no art copied), the size
+    of the other side boxes (box: the export's pen sprite, its pixel w, h) -> HxWx4 uint8"""
+    import math
+    w, h, k = int(box['w']), int(box['h']), 4
+    u = h / 36.0                                                 # drawn on the 28 x 36 box
+    X, Y = np.meshgrid((np.arange(w * k) + 0.5) / k / u, (np.arange(h * k) + 0.5) / k / u)
+    cx, cy, ro, ri = w / u / 2.0, 20.5, 8.4, 6.5
+    d = np.hypot(X - cx, Y - cy)
+    m = (d <= ro) & (d >= ri)                                    # the ring
+    m |= (np.abs(X - cx) <= 2.1) & (Y >= 7.4) & (Y <= 9.5)       # the crown
+    m |= (np.abs(X - cx) <= 0.85) & (Y >= 9.5) & (Y <= cy - ro + 0.6)
+    a = math.radians(45.0)                                       # the side button
+    bx, by = cx + (ro + 1.1) * math.sin(a), cy - (ro + 1.1) * math.cos(a)
+    m |= np.hypot(X - bx, Y - by) <= 1.25
+    a = math.radians(35.0)                                       # the hand, towards one o'clock
+    ux, uy = math.sin(a), -math.cos(a)
+    t = (X - cx) * ux + (Y - cy) * uy
+    m |= (t >= -0.5) & (t <= 4.9) & (np.abs((X - cx) * uy - (Y - cy) * ux) <= 0.9)
+    m |= d <= 1.4                                                # the hub
+    cov = m.astype(np.float64).reshape(h, k, w, k).mean(axis=(1, 3))
+    lo, hi = np.array(purple, np.float64), np.array((255.0, 255.0, 255.0))
+    img = np.empty((h, w, 4), np.uint8)
+    img[..., :3] = np.clip(np.round(lo[None, None, :] + cov[:, :, None] * (hi - lo)[None, None, :]), 0, 255)
+    img[..., 3] = 255
+    return img
+
+
 def solid_images(P):
     return {name: {'img': np.tile(np.array(c, np.uint8), (16, 16, 1))} for name, c in solid_colours(P).items()}
 

@@ -14,8 +14,8 @@
 
 namespace tower {
 
-constexpr int kRows = 22;                 // rows the template draws
-constexpr double kArrowSeconds = 4.0;     // display choice (F1 TV: "for a while", research.md §6, §9)
+constexpr int kRows = 30;                 // rows the template draws (leaves v9; 22 before)
+constexpr double kArrowSeconds = 3.0;     // display choice: about 3 s in the reference clip (4 s before)
 constexpr double kClsHold = 0.3;          // s a valid classification is held over invalid reads
 constexpr double kTyreHold = 1.0;         // s a tyre letter is held over a stale cache (field-traces.md §1)
 constexpr int64_t kMaxGapMs = 3 * 3600 * 1000; // larger gaps are not a valid race state
@@ -25,6 +25,14 @@ constexpr int64_t kMaxGapMs = 3 * 3600 * 1000; // larger gaps are not a valid ra
 constexpr int kYellowHoldReads = 1;
 constexpr double kFlagMaxAge = 1.0; // s; an older flags read (the tower was off, or the reader fell behind) is unread
 constexpr double kModeMaxAge = 1.0; // s; an older game mode read is unread (no Time Trial board from a stale label)
+// the lap time flash in Practice and Qualifying (ui-build.md 20): a car's new best lap shows in its gap cell
+// for kFlashSeconds (the reference clip: about 2 s). kFlashFill or more cars improving in one read is the game
+// filling the cars' laps (an in-game test: 10 at once when Q1 ended), taken over without a flash.
+constexpr double kFlashSeconds = 2.0;
+constexpr int kFlashFill = 4;
+// the knockout zone's field is held per session type; a tower off for longer than this starts it again (an
+// in-game test: 0.9 s off between Q1's and Q2's fields, while the type still read Q1)
+constexpr double kKoFieldGap = 5.0;
 
 enum class Mode : int { full = 0, compact = 1, top = 2 };
 enum class GapMode : int { interval = 0, leader = 1, autoswitch = 2 };
@@ -32,7 +40,7 @@ enum class GapMode : int { interval = 0, leader = 1, autoswitch = 2 };
 struct Settings {
     bool enabled = true;
     Mode mode = Mode::compact;
-    int rows = 5;                 // compact / top N, 3..22
+    int rows = 5;                 // compact / top N (the setting's range; at most kRows)
     bool header = true, tyres = true, arrows = true, gaps = true, team_colours = true, highlight = true,
          animation = true;
     GapMode gap_mode = GapMode::interval;
@@ -61,14 +69,27 @@ struct RowView {
     bool gna = false;
     uint8_t shown = kShownOff;
     char tyre = 0;                // 'S' 'M' 'H' 'I' 'W' or 0
+    // the detail cell's text: spectator Detail Penalties "5s", "DT", "SG"; Position Change the places
+    // gained or lost ("3", with dup or ddn) or "-" (none), Stops the count or "-" (none, as the game's board); else ""
+    char det[8] = {};
+    bool dup = false, ddn = false; // Detail Position Change: det counts places gained (dup) or lost (ddn)
     bool tna = false;
     bool tyre_held = false;       // the letter is held over a stale cache (log only)
     bool pit = false, pen = false, out = false, me = false;
+    // the knockout zone: Q1, Q2, SQ1, SQ2 only; the car's position is below the last one that goes through
+    // (View::ko_safe) and it is not out
+    bool ko = false;
+    // the lap time flash (best laps in Practice and Qualifying): the gap cell holds the car's new best lap for
+    // kFlashSeconds, green (pb) for a personal best, purple (ob) for the session's best; never both
+    bool pb = false, ob = false;
+    // the race's fastest lap (the game's own fastest car): this car holds it (View::fl_vid)
+    bool fl = false;
     // team badge, whatever the team colour setting (the template hides the logo when it is off): the car's key
     // when the reader has it (the leaf is kBadgePrefix + key), else "" and bdg false
     bool bdg = false;
     int8_t bkey = -1;             // the key's index in the snapshot's table (the log), -1 unknown
     char badge[kBadgeKeyMax] = {};
+    bool brender = false;         // badge is a render badge's key (the leaf: kRenderBadgePrefix + key)
 };
 
 struct View {
@@ -80,6 +101,27 @@ struct View {
     bool show = false;            // on || trial: the tower's host shows (the stock board and lap counter hide)
     Settings set;
     bool lead = false;            // the gap column shows gaps to the leader
+    bool laps = false;            // the gap column shows each car's lap time (spectator Gap 3, best laps)
+    bool flap = false;            // spectating with the menu on Gap Fastest Lap (every row a lap time)
+    // best laps: a timed session without the spectator menu (or with its Interval / Leader; Interval
+    // gaps to the car directly ahead). P1's best lap (m:ss.fff), the others' gap to it
+    // (+s.fff), the dim bar without a time. best_p1: P1's time in ms (-1 none); best_n: classified cars with a
+    // time; best_inv: cars whose time is below the time of a car classified ahead of it (0 when the field is the best
+    // lap and the order is the game's; such a car shows the dim bar)
+    bool best = false;
+    int64_t best_p1 = -1;
+    int best_n = 0, best_inv = 0;
+    // the knockout zone: the last position that goes through in a knockout session (Q1, Q2, SQ1, SQ2), from
+    // the game's own drop zone rule (field-traces.md 5.1; the cut is inferred); -1 in every other session
+    int ko_safe = -1;
+    // the race's fastest lap: the game's own fastest car (VehicleLapTimes +0xb8, field-traces.md §11) when it
+    // is classified, -1 none; fl_ms its best valid lap by the game's rule from its lap table, -1 unknown (the mark
+    // shows without it). An earlier build's source (the results entry's lap time) is no longer used in races
+    int fl_vid = -1;
+    int64_t fl_ms = -1;
+    // the lap time flash per vehicle id (the log): 0 none, 1 green, 2 purple
+    uint8_t fx[kCars] = {};
+    int sgap = -1, sdet = -1;     // the spectator menu's Gap / Detail the tower follows, -1 its own settings
     int count = 0;                // classified cars
     int start = 0;                // window start (index into the classification)
     int rows = 0;
@@ -112,7 +154,13 @@ struct View {
 
 // Text helpers (also used by the tests).
 void race_gap_text(int64_t ms, char *out, size_t cap); // "+5.1", "+1:05.3": one decimal, cut
+void lap_time_text(int64_t ms, char *out, size_t cap); // "1:32.4", "58.7": one decimal, cut
+int64_t game_lap_ms(float s);                          // the game's own conversion: s * 1000.0f, truncated
+void best_lap_text(int64_t ms, char *out, size_t cap); // "1:27.470", "58.123": three decimals
+void best_gap_text(int64_t ms, char *out, size_t cap); // "+0.293", "+1:02.345": three decimals
+void penalty_text(int dt, int sg, bool tpen_ok, float tpen_s, char *out, size_t cap); // "DT", "SG", "5s" or ""
 const char *session_label(uint32_t type);              // "Q2", "R", "" for unknown
+int knockout_safe(uint32_t session, int n);            // the last position through in Q1/Q2/SQ1/SQ2 (n cars), -1 none
 
 // The window over the classification: compact = N rows around the player, start = clamp(i - floor(N/2), 0,
 // count - N) (the game's own 5-pill rule for N = 5); top = the first N; full = every car up to kRows.
@@ -127,6 +175,7 @@ public:
 
 private:
     void track_arrows(const Classification &c, double now);
+    void track_flash(const Classification &c, bool active, double now);
 
     View v_;
     uint32_t generation_ = ~0u, session_ = ~0u;
@@ -149,6 +198,17 @@ private:
     int zred_misses_ = 0;
     uint8_t ysec_ = 0;
     bool yun_ = false;
+    // the best laps the flash follows, by vehicle id (-1 none); taken without a flash after a reset
+    bool fx_base_ = false;
+    int64_t fx_ms_[kCars] = {};
+    double fx_until_[kCars] = {};
+    uint8_t fx_kind_[kCars] = {};
+    // the knockout zone's field: the most cars classified since the session type changed
+    uint32_t ko_session_ = ~0u;
+    int ko_n_ = 0;
+    double ko_t_ = -1e9;
+    // the race's fastest lap holder (the game's)
+    int fl_vid_ = -1;
 };
 
 } // namespace tower

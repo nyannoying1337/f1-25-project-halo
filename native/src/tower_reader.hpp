@@ -18,7 +18,8 @@
 
 namespace tower {
 
-constexpr int kCars = 24;       // vehicle ids 0..23 (the game's tables hold up to 24 cars; the halo's rival slots)
+constexpr int kCars = 30;       // vehicle ids 0..29 (24 before: the game's 2026 telemetry builds 24 cars,
+                                // Game_TelemetryUdp_Send2026; 30 is headroom for bigger fields)
 constexpr int kLogRecords = 96; // penalty records kept per read (a session holds tens)
 
 // Registry keys and the globals the reader starts from (absolute addresses: image base + rva in the game).
@@ -36,6 +37,10 @@ struct Keys {
     uintptr_t sector_table = 0;      // image globals: sector ends, track length, count (image + 0x6ce6660, kSectorBlock)
     uintptr_t game_mode_context = 0; // team badges: the entrants' game, image + 0x604ed28
     uintptr_t team_tables = 0;       // team badges: the team records per kind, image + 0x606ecd8
+    uintptr_t lap_times = 0;         // VehicleLapTimes, image + 0x6096ae8 (the race's fastest lap)
+    uintptr_t badge_names = 0;       // render badge source names, image + 0x5612e60 (char *[3])
+    uintptr_t badge_none = 0;        // the render badge none value's word, image + 0xbd53ed8
+    uintptr_t customisation = 0;     // the player customisation system's pointer, image + 0x6064cb8 (log)
 };
 constexpr uintptr_t kRvaPit = 0x60fb708;
 Keys keys_from_image(uintptr_t image_base, uintptr_t game_manager);
@@ -47,8 +52,14 @@ struct Frame {
     uint32_t generation = 0;  // the provider's car-set generation (new session, restart, car joins/leaves)
     char slots[33]{};         // the vehicle table's slot status from the halo's last scan ('.' = a car with ERS,
                               // 's' = a car without: the safety car, and every F2 car)
-    int player = -1;          // the player's vehicle id, -1 none
+    int player = -1;          // the player's vehicle id, -1 none (while spectating: the watched car)
     float player_lap_m = -1;  // the player's distance into the lap (the halo's progress read), m; < 0 unknown
+    // The game's spectator menu while its spectator HUD is up and the tower follows the watched car (the director's
+    // Gap +0xe4 and Detail +0xe8 as the halo's scan read them; docs/spectator-ui.md 10.4). spect false: the tower's
+    // own settings.
+    bool spect = false;
+    uint32_t spect_gap = 0, spect_detail = 0;
+    uint32_t frame_no = 0;    // the halo's frame counter (the logs' frame column), for the hdk events
     char slot(int vid) const { return vid >= 0 && vid < 32 ? slots[vid] : 0; }
 };
 
@@ -56,6 +67,9 @@ struct Frame {
 
 // Results (R): one copy of [P, P+0x58) per competitor at 10 Hz. pos 1-based; status P+0x18 0..7
 // (2 running, 3 finished, 4 DNF, 5 DSQ, 6 NC, 7 retired); the time-penalty total P+0x38 ^ P+0x40 (double, s).
+// While the spectator menu's Gap is 3 (lap time) the copy is [P, P+0x118): the lap time the game's board shows in
+// that mode, f32 bits P+0xe8 ^ P+0xf0 (s), shown unless 0 or u8 P+0x108 ^ P+0x110 is 0xff (row updater
+// 0x14177a4f5..0x14177a5bc, docs/spectator-ui.md 10.4).
 struct Classification {
     bool ok = false;           // at least one car, no two cars on one position
     uint32_t seq = 0;          // bumps on every successful read
@@ -66,6 +80,18 @@ struct Classification {
     uint8_t status[kCars]{};   // by vehicle id; 0xff unreadable
     bool tpen_ok[kCars]{};
     float tpen_s[kCars]{};
+    bool lap_ok[kCars]{};      // the lap time was read and the game's board would show it (Gap 3, timed sessions)
+    float lap_s[kCars]{};
+    // the spectator's Detail cell (the long copy only): the grid slot, 1-based
+    // (u32 P+0x90 ^ P+0x98, + 1 as the game's own m_gridPosition), 0 unread or out of range; the best lap's number
+    // (u8 P+0x108 ^ P+0x110, the byte lap_ok checks), -1 unread, 0xff the game's none
+    uint8_t grid[kCars]{};
+    int16_t best_lap[kCars];
+    Classification()
+    {
+        for (int16_t &b : best_lap)
+            b = -1;
+    }
     int holes = 0;             // positions 1..max with no car (a car the table no longer holds)
     int dups = 0;              // cars that shared a position (the read is then not ok)
     int8_t sorted = -1;        // the game's sorted list [R+0x108, R+0x110) agrees with the positions: 1 yes, 0 no, -1 unread
@@ -97,6 +123,10 @@ struct PitLaps {
     bool laps_ok = false;
     bool lap_have[kCars]{};
     int16_t lap[kCars]{};      // laps completed (0 on lap 1, seen in game)
+    // the spectator's Detail Stops: the game's own pit stop count, u32 [q+0x14] of the pit
+    // entry whose state the DLL reads at q+4 (one copy [q+4, q+0x18)); counts above kMaxStops are not read
+    bool stops_have[kCars]{};
+    uint8_t stops[kCars]{};
     double t = -1;
 };
 // The game's pit-lane rule for the gap flags (0x140814093..0x1408140c1): states 2..7 and 14..15.
@@ -115,6 +145,14 @@ struct TyreRead {
     double t = -1;             // last read attempt
     char held = 0;             // the last checked letter (shown for at most 1 s while the cache is stale)
     double held_t = -1;        // when it was read
+    // the spectator's Detail Best, read only while the menu is on it: the set vector's
+    // stints (0x78 bytes each, the last one the current set); prev_end the highest end lap (u16 +0x74, 0xffff
+    // skipped) of the stints before the current one, -1 none. The game takes the first stint whose end lap is at
+    // least the best lap's number, else the last: the best lap was on the current set exactly when prev_end is
+    // below that number
+    bool stint_ok = false;
+    int16_t stints = 0;
+    int32_t prev_end = -1;
 };
 
 // Tyre letter after the cross-check: the visual byte must be the game's own id for the enum's compound
@@ -170,6 +208,8 @@ enum BadgeState : uint8_t {
     kBadgeKey,        // the key was read: the pill shows kBadgePrefix + key
     kBadgeOther,      // the game builds another path for this team (My Team, or a render badge): unknown here
     kBadgeFailed,     // a step failed, or the game has no badge for the car (it writes nothing): unknown, retried
+    kBadgeRender,     // a render badge whose path the reader built (record +0x58d, not My Team): the key
+                      // is the part after kRenderBadgePrefix
 };
 // The step a failed read stopped at (the log's digit): 1 game mode context not in the registry, 2 [GMC+0x88] or
 // [..+0x260] null or unreadable, 3 entrant vector unreadable, not sane or empty (Badges::entrants says which), 4 no
@@ -180,8 +220,10 @@ struct BadgeRead {
     uint8_t state = kBadgeUnread;
     uint8_t step = 0;            // kBadgeFailed: the step (1..9)
     uint8_t kind = 0xff;         // team word low byte (0xff: no entrant read)
-    int8_t key = -1;             // kBadgeKey: index into Badges::key
+    int8_t key = -1;             // kBadgeKey, kBadgeRender: index into Badges::key
     uint16_t index = 0;          // team word high 16 bits
+    bool ref_ok = false;         // the entrant's badge u32 +0x68 was read (My Team and render cars; the log)
+    uint32_t ref = 0;
     double t = -1;               // the last attempt
 };
 // The game's entrant vector [G+0x2e0, G+0x2e8) at the last badge run (the log's bdgvec): its record count (0 = empty),
@@ -196,10 +238,13 @@ struct Badges {
     BadgeRead car[kCars];
     int keys = 0;                    // distinct keys, in first-read order (an index never changes within a car set)
     char key[kCars][kBadgeKeyMax]{};
+    bool render[kCars]{};            // key k is a render badge's (kRenderBadgePrefix + key)
+    bool std_ok = false;             // the player customisation system's standard badge u32 (+0x1b8), read
+    uint32_t std_badge = 0;          // when a My Team car was found (the log's mtb)
     uint32_t seq = 0;                // bumps whenever a car's result changes (the log lists the keys then)
     int32_t entrants = kEntrantsNotRead;
 };
-constexpr int kBadgeCarsPerRun = 6;  // a 22-car field takes four classification runs (0.4 s)
+constexpr int kBadgeCarsPerRun = 6;  // a 22-car field takes four classification runs (0.4 s), 30 cars five, 30 cars five, 30 cars five, 30 cars five, 30 cars five
 // The entrant vector has no cap in the game (Sess_ParticipantVec_PushBack grows it; a career keeps every entrant of
 // its world there, not only the session's cars). The reader walks it in order, kEntrantChunk records per copy, and
 // stops once every due car has its first entrant. kMaxEntrants is a sanity bound, not a game value.
@@ -225,6 +270,25 @@ struct ModeRead {
     char label[kModeLabelMax] = {};
 };
 
+// The race's fastest lap (field-traces.md §11): VehicleLapTimes, read in races only by its own job (4 Hz). The
+// fastest car each run (one copy with the car vector); a car's best valid lap again when its lap index changed or
+// kLapRefresh after the last read, kLapCarsPerRun cars a run, one copy of its entries 0..index + 1.
+struct LapTimes {
+    bool ok = false;              // the system and its car vector were read in the last run
+    uint8_t fastest = laptimes::none; // the game's fastest car (u8 LT+0xb8), laptimes::none none or unread
+    bool fastest_ok = false;      // the byte was read in the last run
+    bool best_ok[kCars]{};        // the car's best valid lap is known
+    int64_t best_ms[kCars]{};     // game_lap_ms of it
+    uint8_t best_lap[kCars]{};    // its entry
+    bool read[kCars]{};           // the car's entries were read in this car set
+    uint8_t index[kCars]{};       // the record's lap index at that read
+    double read_t[kCars]{};       // when
+    uint32_t seq = 0;             // bumps when a best lap or the fastest car changes
+    double t = -1;
+};
+constexpr int kLapCarsPerRun = 4;
+constexpr double kLapRefresh = 5.0;
+
 struct Snapshot {
     Classification cls;
     Timing timing;
@@ -235,9 +299,11 @@ struct Snapshot {
     FlagRead flags;
     Badges badges;
     ModeRead mode;
+    LapTimes laps;
     // which systems the registry gave this second (debug text and the log)
     bool found_results = false, found_timing = false, found_pit = false, found_sc = false, found_log = false,
-         found_s1 = false, found_tyres = false, found_progress = false, found_zones = false, found_red = false;
+         found_s1 = false, found_tyres = false, found_progress = false, found_zones = false, found_red = false,
+         found_laps = false;
 };
 
 // ---------------------------------------------------------------- reader
@@ -260,7 +326,7 @@ public:
     // jobs run by the last update(): bit i = job i (kJob* below)
     unsigned ran() const { return ran_; }
 
-    enum Job { kJobCls, kJobTiming, kJobPitLaps, kJobPen, kJobTyreA, kJobTyreB, kJobFlags, kJobMode, kJobs };
+    enum Job { kJobCls, kJobTiming, kJobPitLaps, kJobPen, kJobTyreA, kJobTyreB, kJobFlags, kJobMode, kJobLaps, kJobs };
 
 private:
     struct Component {
@@ -280,7 +346,8 @@ private:
     void job_tyres(double now, const Frame &f, int half);
     void job_flags(double now, const Frame &f);
     void job_mode(double now);
-    void read_tyre(uintptr_t v, TyreRead &t);
+    void job_laps(double now, const Frame &f);
+    void read_tyre(uintptr_t v, TyreRead &t, bool stints);
     void read_badges(double now, const Frame &f);
     bool read_cstr(uintptr_t p, char *out, size_t cap);
     void reset(double now);
@@ -291,7 +358,8 @@ private:
     Mem m_;
     Keys k_;
     Snapshot s_;
-    Component c_results_, c_timing_, c_pit_, c_sc_, c_log_, c_s1_, c_tyres_, c_zones_, c_red_, c_mode_, c_teams_;
+    Component c_results_, c_timing_, c_pit_, c_sc_, c_log_, c_s1_, c_tyres_, c_zones_, c_red_, c_mode_, c_teams_,
+        c_laps_;
     double due_[kJobs] = {};
     uint32_t generation_ = ~0u;
     uint32_t session_ = ~0u;
@@ -305,10 +373,12 @@ private:
     uint8_t tbuf_[64 * 0x98];   // T entries (one copy per read)
     uint8_t zbuf_[kMaxMarshalZones * kZoneStride]; // zone entries (one copy per read)
     uint8_t ebuf_[kEntrantChunk * badge::entrant_stride]; // entrants (one chunk per copy, badge runs only)
+    int laps_next_ = 0;         // the car the next lap times run starts with (round robin)
+    uint8_t lbuf_[laptimes::max_laps * laptimes::lap_stride]; // one car's lap entries (one copy per read)
 };
 
 // Job periods (s). Tyres: each half every 0.5 s (2 Hz per car), the halves 0.25 s apart. Flags: 4 Hz
-// (field-traces.md §7.6). Game mode: 4 Hz.
-constexpr double kPeriod[Reader::kJobs] = {0.1, 0.1, 0.1, 0.25, 0.5, 0.5, 0.25, 0.25};
+// (field-traces.md §7.6). Game mode: 4 Hz. Lap times (races only): 4 Hz.
+constexpr double kPeriod[Reader::kJobs] = {0.1, 0.1, 0.1, 0.25, 0.5, 0.5, 0.25, 0.25, 0.25};
 
 } // namespace tower

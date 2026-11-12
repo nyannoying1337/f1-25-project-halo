@@ -22,6 +22,7 @@
 #include "game_state_f1_25.hpp"
 #include "hud_model.hpp"
 #include "leaves.hpp"
+#include "tower_anim.hpp"
 #include "tower_leaves.hpp"
 #include "tower_model.hpp"
 #include "tower_reader.hpp"
@@ -35,7 +36,7 @@ SWOFTY_SETTING(bool, show_names, true);
 SWOFTY_SETTING(bool, show_turns, true);
 SWOFTY_SETTING(bool, g_meter, false);
 SWOFTY_SETTING(bool, all_cars, true);
-SWOFTY_SETTING(bool, validation_log, true);
+SWOFTY_SETTING(bool, validation_log, false);
 // timing tower (swofty.json "tower*" options; read 4 times a second)
 SWOFTY_SETTING(bool, tower_on, true);
 SWOFTY_SETTING(std::string_view, tower_mode, "compact");
@@ -48,6 +49,7 @@ SWOFTY_SETTING(bool, tower_team_colours, true);
 SWOFTY_SETTING(bool, tower_highlight, true);
 SWOFTY_SETTING(std::string_view, tower_gap_mode, "interval");
 SWOFTY_SETTING(int, tower_auto_s, 10);
+SWOFTY_SETTING(bool, tower_animations, true);
 
 namespace {
 
@@ -80,6 +82,7 @@ struct App {
     bool tower_reads = false;          // the provider is compatible: the reader has this build's keys
     tower::Reader treader;
     tower::Model tmodel;
+    tower::Anim tanim;                 // the rows' motion packets (fixed arrays, about 8 KB)
     std::unique_ptr<tower::Publisher> tpub; // the leaf table (about 230 KB), built once
     tower::Settings tset;
     tower::Frame tframe;
@@ -120,7 +123,7 @@ void read_tower_settings(App &A)
     s.gap_mode = g == "leader" ? tower::GapMode::leader : g == "auto" ? tower::GapMode::autoswitch : tower::GapMode::interval;
     s.auto_period = std::clamp(int(tower_auto_s), 5, 60);
     s.opacity = 100;      // no option: the HUD editor's own opacity applies to the element (contract §2)
-    s.animation = true;   // no option yet (contract §2)
+    s.animation = tower_animations; // the Animations option (off: the static tower's leaves, no anim leaf written)
     s.debug = validation_log;
 }
 
@@ -301,12 +304,18 @@ void frame(double dt, void *)
     f.slots[sizeof f.slots - 1] = 0;
     f.player = A.player;
     f.player_lap_m = st.progress.ok ? st.progress.lap_m : -1.f;
+    // the spectator menu's Gap and Detail while the halo and the tower follow the watched car (10.4)
+    f.spect = st.spectate.on;
+    f.spect_gap = st.spectate.gap;
+    f.spect_detail = st.spectate.detail;
+    f.frame_no = uint32_t(st.frame); // the hdk events' frame (the logs' frame column)
     if (A.tower_reads && A.tset.enabled)
         A.treader.update(A.wall, f);
     const double t2 = qpc_now_us(A);
     A.tmodel.update(A.treader.snapshot(), f, A.tset, A.wall);
+    A.tanim.update(A.tmodel.view(), f, A.tmodel, A.wall); // after the model, from what it publishes
     const double t3 = qpc_now_us(A);
-    A.t_writes = A.tpub->publish(A.tmodel.view(), A.wall, std::max(0, tower::kFrameBudget - halo_writes));
+    A.t_writes = A.tpub->publish(A.tmodel.view(), A.wall, std::max(0, tower::kFrameBudget - halo_writes), &A.tanim);
     const double t4 = qpc_now_us(A);
     A.t_read_us = float(t2 - t1);
     A.t_model_us = float(t3 - t2);
@@ -375,7 +384,23 @@ void frame(double dt, void *)
         rec.halo_writes = A.t_halo_writes;
         rec.copies = A.treader.copies();
         rec.jobs = A.treader.ran();
+        rec.anim = A.tanim.stats();
+        A.tanim.clear_snap_bits();
+        rec.started = A.tpub->events(); // the apk column
+        rec.rowsnaps = A.tanim.events();
+        rec.hdpub = A.tpub->head_events(); // the hdk column
+        rec.hdanim = A.tanim.head_events();
+        A.tpub->clear_events();
+        A.tanim.clear_events();
+        A.tpub->clear_head_events();
+        A.tanim.clear_head_events();
         diag::record_tower(rec);
+    }
+    if (!validation_log) {
+        A.tpub->clear_events();
+        A.tanim.clear_events();
+        A.tpub->clear_head_events();
+        A.tanim.clear_head_events();
     }
 }
 

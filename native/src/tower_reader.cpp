@@ -3,6 +3,7 @@
 #include "tower_reader.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace tower {
@@ -19,8 +20,12 @@ constexpr size_t kMaxSlots = 4096;     // registry slots (the provider's bound)
 constexpr size_t kMaxEntries = 64;     // per-vehicle vectors (sanity bound, not a game value)
 constexpr size_t kTimingStride = 0x98; // T entry
 constexpr size_t kResultsSpan = 0x58;  // [P, P+0x58): vid +0, status +0x18, time penalty +0x38/+0x40, position +0x48/+0x50
+constexpr size_t kResultsLapSpan = 0x118; // + the lap time +0xe8/+0xf0 and its flag +0x108/+0x110 (spectator Gap 3)
 constexpr size_t kTyreLo = 0x9bc0, kTyreHi = 0x9ca0; // one copy: version, descriptor list, count, cache stamps, set vector
 constexpr int kMaxPenaltyChunk = 32;
+constexpr size_t kStintStride = 0x78; // a set vector entry (the tyre code reads the current set's id at +0xc)
+constexpr size_t kMaxStints = 16;     // sanity bound, not a game value
+constexpr uint32_t kMaxStops = 99;    // larger counts are not a valid race state
 
 // An empty [b, e) vector is valid (n = 0); otherwise aligned bounds holding a whole number of elements.
 bool vec_ok(uintptr_t b, uintptr_t e, size_t stride, size_t max_n, size_t &n)
@@ -79,6 +84,10 @@ Keys keys_from_image(uintptr_t b, uintptr_t gm)
     k.sector_table = b + track_globals::sector_end;
     k.game_mode_context = b + keys::game_mode_context;
     k.team_tables = b + keys::team_tables;
+    k.lap_times = b + keys::lap_times;
+    k.badge_names = b + render_badge::names;
+    k.badge_none = b + render_badge::none_word;
+    k.customisation = b + render_badge::customisation;
     return k;
 }
 
@@ -147,7 +156,7 @@ void Reader::reset(double now)
     s_ = Snapshot{};
     s_.mode = mode;
     // staggered so two heavy jobs rarely share a frame; the light game mode read runs first, in the reset's frame
-    const double offset[kJobs] = {0.0, 0.033, 0.066, 0.05, 0.02, 0.27, 0.175, -0.001};
+    const double offset[kJobs] = {0.0, 0.033, 0.066, 0.05, 0.02, 0.27, 0.175, -0.001, 0.12};
     for (int j = 0; j < kJobs; ++j)
         due_[j] = now + offset[j];
     pen_count_ = ~0u;
@@ -196,6 +205,7 @@ void Reader::update(double now, const Frame &f)
         case kJobTyreB: job_tyres(now, f, 1); break;
         case kJobFlags: job_flags(now, f); break;
         case kJobMode: job_mode(now); break;
+        case kJobLaps: job_laps(now, f); break;
         default: break;
         }
     }
@@ -227,11 +237,31 @@ void Reader::job_cls(double now, const Frame &f)
     int8_t owner[kMaxEntries + 1];
     std::memset(owner, -1, sizeof owner);
     int maxpos = 0;
+    // the spectator menu's lap time mode, timed sessions' best laps and races' fastest lap: the longer
+    // copy (the game's own board reads these fields in its Fastest Lap mode)
+    const bool laps = (f.spect && f.spect_gap == 3) || (f.session_ok && f.session >= 1 && f.session <= 17);
+    const size_t span = laps ? kResultsLapSpan : kResultsSpan;
     for (int vid = 0; vid < kCars && size_t(vid) < ne; ++vid) {
         const uintptr_t P = ptr[vid];
-        uint8_t b[kResultsSpan];
-        if (!racer(f, vid) || !P || (P & 7) || !rd(P, b, sizeof b) || b[0] != vid)
+        uint8_t b[kResultsLapSpan];
+        if (!racer(f, vid) || !P || (P & 7) || !rd(P, b, span) || b[0] != vid)
             continue;
+        if (laps) {
+            const uint32_t lb = at<uint32_t>(b, 0xe8) ^ at<uint32_t>(b, 0xf0);
+            float lt;
+            std::memcpy(&lt, &lb, sizeof lt);
+            const uint8_t none = uint8_t(b[0x108] ^ b[0x110]);
+            if (std::isfinite(lt) && lt > 0.f && lt < 3600.f && none != 0xff) {
+                c.lap_ok[vid] = true;
+                c.lap_s[vid] = lt;
+            }
+            // the spectator's Detail cell: the grid slot (the game's Position Change is
+            // position minus grid, 0x141778b8f) and the best lap's number (its Best, 0x1417792a0)
+            const uint32_t g = (at<uint32_t>(b, 0x90) ^ at<uint32_t>(b, 0x98)) + 1;
+            if (g >= 1 && g <= ne && g <= kMaxEntries)
+                c.grid[vid] = uint8_t(g);
+            c.best_lap[vid] = none;
+        }
         const uint8_t st = b[0x18];
         c.status[vid] = st <= 7 ? st : 0xff;
         const uint64_t bits = at<uint64_t>(b, 0x38) ^ at<uint64_t>(b, 0x40);
@@ -349,7 +379,7 @@ void Reader::read_badges(double now, const Frame &f)
     B.entrants = int32_t(ne);
     if (!ne)
         return fail_all(3);
-    uint32_t word[kBadgeCarsPerRun] = {};
+    uint32_t word[kBadgeCarsPerRun] = {}, ref[kBadgeCarsPerRun] = {};
     bool hit[kBadgeCarsPerRun] = {};
     bool walked = true; // false: a chunk was unreadable, so a car not found yet is unknown (step 3), not absent (4)
     int left = nd;
@@ -366,6 +396,7 @@ void Reader::read_badges(double now, const Frame &f)
                 if (!hit[i] && e[badge::entrant_vid] == due[i]) {
                     hit[i] = true;
                     word[i] = at<uint32_t>(e, badge::entrant_team);
+                    ref[i] = at<uint32_t>(e, render_badge::entrant_badge);
                     --left;
                 }
         }
@@ -418,7 +449,19 @@ void Reader::read_badges(double now, const Frame &f)
         got.index = uint16_t(index);
         got.t = now;
         if (kind == badge::my_team_kind) { // the game's My Team path (0x141760107): a render badge
+            // the badge comes from Game_PlayerCustomisationInfoSystem_GetAssignedBadge (obfuscated, not followed)
+            // in a My Team career, else from the entrant (+0x68) or the standard badge: unknown here. The log
+            // keeps the entrant's word and the standard badge for a My Team drive to compare.
             got.state = kBadgeOther;
+            got.ref_ok = true;
+            got.ref = ref[i];
+            uintptr_t X = 0;
+            uint32_t sb = 0;
+            if (!B.std_ok && k_.customisation && get(k_.customisation, X) && X && !(X & 7) &&
+                get(X + render_badge::standard_badge, sb)) {
+                B.std_ok = true;
+                B.std_badge = sb;
+            }
         } else {
             if (!rd(rec + badge::record_key, span, sizeof span)) {
                 fail(vid, 8);
@@ -426,7 +469,38 @@ void Reader::read_badges(double now, const Frame &f)
             }
             const uintptr_t kp = at<uintptr_t>(span, 0);
             if (span[badge::record_render - badge::record_key]) {
-                got.state = kBadgeOther; // 0x14176028c: Team_Format_RenderBadgePath
+                // 0x14176028c: Team_Format_RenderBadgePath of the entrant's badge +0x68 (the path built here
+                // as its body 0x14c0d38f0 does; unknown when a part is unreadable or out of range)
+                got.state = kBadgeOther;
+                got.ref_ok = true;
+                got.ref = ref[i];
+                const unsigned src = ref[i] & 0xff, id = ref[i] >> 16;
+                uint32_t nw = 0;
+                uintptr_t np = 0;
+                char key[kBadgeKeyMax] = {};
+                if (src <= render_badge::max_source && k_.badge_none && get(k_.badge_none, nw)) {
+                    char name[24];
+                    if (uint32_t(nw + render_badge::none_add) == id)
+                        std::snprintf(key, sizeof key, "%s", kRenderBadgeDefault);
+                    else if (k_.badge_names && get(k_.badge_names + src * 8, np) && np &&
+                             read_cstr(np, name, sizeof name) && name[0])
+                        std::snprintf(key, sizeof key, "%s %u", name, id);
+                }
+                int id_k = -1;
+                if (render_key_ok(key, sizeof key)) {
+                    for (int k = 0; k < B.keys && id_k < 0; ++k)
+                        if (B.render[k] && std::strcmp(B.key[k], key) == 0)
+                            id_k = k;
+                    if (id_k < 0 && B.keys < kCars) {
+                        id_k = B.keys++;
+                        std::memcpy(B.key[id_k], key, std::strlen(key) + 1);
+                        B.render[id_k] = true;
+                    }
+                }
+                if (id_k >= 0) {
+                    got.state = kBadgeRender;
+                    got.key = int8_t(id_k);
+                }
             } else {
                 char key[kBadgeKeyMax];
                 if (!kp || !read_cstr(kp, key, sizeof key)) {
@@ -439,7 +513,7 @@ void Reader::read_badges(double now, const Frame &f)
                 }
                 int id = -1;
                 for (int k = 0; k < B.keys && id < 0; ++k)
-                    if (std::strcmp(B.key[k], key) == 0)
+                    if (!B.render[k] && std::strcmp(B.key[k], key) == 0)
                         id = k;
                 if (id < 0 && B.keys < kCars) {
                     id = B.keys++;
@@ -456,6 +530,100 @@ void Reader::read_badges(double now, const Frame &f)
         B.car[vid] = got;
         ++B.seq;
     }
+}
+
+// ---------------------------------------------------------------- the race's fastest lap
+
+// VehicleLapTimes (field-traces.md §11), races only. Each run: the fastest car and the car vector (one copy), the
+// record pointers (one copy), each racer's lap index (one byte copy); a car whose index changed, or whose last read
+// is kLapRefresh old, gets its entries 0..index + 1 copied (one copy) and its best valid lap recomputed by the
+// game's rule, kLapCarsPerRun cars a run (round robin). Nothing is kept for a car without a sane record.
+void Reader::job_laps(double now, const Frame &f)
+{
+    LapTimes &L = s_.laps;
+    L.t = now;
+    L.ok = false;
+    const bool race = f.session_ok && f.session >= 15 && f.session <= 17;
+    const uintptr_t LT = race ? find(c_laps_, k_.lap_times, now) : 0;
+    s_.found_laps = LT != 0;
+    uint8_t hdr[laptimes::header];
+    size_t n = 0;
+    if (!LT || !rd(LT + laptimes::cars, hdr, sizeof hdr) ||
+        !vec_ok(at<uintptr_t>(hdr, 0), at<uintptr_t>(hdr, 8), 8, kMaxEntries, n) || !n) {
+        if (L.fastest_ok)
+            ++L.seq;
+        L.fastest_ok = false;
+        L.fastest = laptimes::none;
+        return;
+    }
+    const uint8_t fc = hdr[laptimes::fastest - laptimes::cars];
+    if (!L.fastest_ok || fc != L.fastest)
+        ++L.seq;
+    L.fastest = fc;
+    L.fastest_ok = true;
+    const int m = n < size_t(kCars) ? int(n) : kCars;
+    uintptr_t ptr[kCars];
+    if (!rd(at<uintptr_t>(hdr, 0), ptr, size_t(m) * 8))
+        return;
+    L.ok = true;
+    int done = 0;
+    for (int k = 0; k < m; ++k) {
+        const int vid = (laps_next_ + k) % m;
+        const uintptr_t R = ptr[vid];
+        uint8_t idx = 0;
+        if (!racer(f, vid) || !R || (R & 7) || !get(R + laptimes::lap_index, idx) || idx >= laptimes::max_laps) {
+            if (L.best_ok[vid] || L.read[vid])
+                ++L.seq;
+            L.best_ok[vid] = false;
+            L.read[vid] = false;
+            continue;
+        }
+        const bool stale = !L.read[vid] || idx != L.index[vid] || now - L.read_t[vid] >= kLapRefresh ||
+                           now < L.read_t[vid];
+        if (!stale || done >= kLapCarsPerRun)
+            continue;
+        if (++done == kLapCarsPerRun)
+            laps_next_ = (vid + 1) % m;
+        // the entries driven so far: 0..index and the one after (a lap that has ended before the index moves)
+        const size_t ne = size_t(idx) + 2 < laptimes::max_laps ? size_t(idx) + 2 : laptimes::max_laps;
+        L.read[vid] = true;
+        L.index[vid] = idx;
+        L.read_t[vid] = now;
+        bool ok = false;
+        int64_t best = -1;
+        uint8_t best_lap = 0;
+        if (rd(R + laptimes::laps, lbuf_, ne * laptimes::lap_stride)) {
+            ok = true;
+            float lo = 0.f;
+            for (size_t j = 0; j < ne; ++j) {
+                const uint8_t *e = lbuf_ + j * laptimes::lap_stride;
+                bool full = true;
+                for (size_t sct : laptimes::sector)
+                    full = full && ((at<uint32_t>(e, sct) ^ at<uint32_t>(e, sct + laptimes::pair)) & 0x7fffffffu);
+                if (!full || e[laptimes::invalid] != (at<uint64_t>(e, laptimes::invalid_key) & 1))
+                    continue;
+                const uint32_t bits = at<uint32_t>(e, laptimes::time) ^ at<uint32_t>(e, laptimes::time + laptimes::pair);
+                float t;
+                std::memcpy(&t, &bits, 4);
+                if (!(t >= 1.f && t <= 1000.f)) // a time outside 1..1000 s: not a lap time, no value
+                    continue;
+                if (best < 0 || t < lo) {
+                    lo = t;
+                    const float ms = t * 1000.0f; // game_lap_ms's rule: the f32 product, cut
+                    best = int64_t(ms);
+                    best_lap = uint8_t(j);
+                }
+            }
+        }
+        const bool now_ok = ok && best >= 0;
+        if (now_ok != L.best_ok[vid] || (now_ok && (best != L.best_ms[vid] || best_lap != L.best_lap[vid])))
+            ++L.seq;
+        L.best_ok[vid] = now_ok;
+        L.best_ms[vid] = now_ok ? best : 0;
+        L.best_lap[vid] = now_ok ? best_lap : 0;
+    }
+    if (done < kLapCarsPerRun)
+        laps_next_ = 0;
 }
 
 // ---------------------------------------------------------------- gaps (T) and the safety car
@@ -514,12 +682,20 @@ void Reader::job_pitlaps(double now, const Frame &f)
     if (S && rd(S + 0x68, rec, sizeof rec)) {
         for (int vid = 0; vid < kCars; ++vid) {
             const uintptr_t q = rec[vid * 2];
-            uint32_t st = 0;
-            if (!racer(f, vid) || !q || (q & 3) || !get(q + 4, st) || st > 15)
+            // the state (q+4) and the game's pit stop count (q+0x14) in one copy
+            uint8_t e[0x14];
+            if (!racer(f, vid) || !q || (q & 3) || !rd(q + 4, e, sizeof e))
+                continue;
+            const uint32_t st = at<uint32_t>(e, 0), stops = at<uint32_t>(e, 0x10);
+            if (st > 15)
                 continue;
             p.pit_have[vid] = true;
             p.pit[vid] = uint8_t(st);
             p.pit_ok = true;
+            if (stops <= kMaxStops) {
+                p.stops_have[vid] = true;
+                p.stops[vid] = uint8_t(stops);
+            }
         }
     }
     // VehicleProgressSystem [[g_Game_Manager]+0x2d0]: entries [sys+0x38, sys+0x40) by vehicle id; lap counter
@@ -637,7 +813,7 @@ void Reader::job_pen(double now, const Frame &f)
 
 // ---------------------------------------------------------------- tyres
 
-void Reader::read_tyre(uintptr_t V, TyreRead &t)
+void Reader::read_tyre(uintptr_t V, TyreRead &t, bool stints)
 {
     uint8_t b[kTyreHi - kTyreLo];
     const auto F = [&](uintptr_t off) { return off - kTyreLo; };
@@ -648,6 +824,21 @@ void Reader::read_tyre(uintptr_t V, TyreRead &t)
     const uint64_t version = at<uint64_t>(b, F(0x9bc0)), count = at<uint64_t>(b, F(0x9c48));
     const uint64_t built_for = at<uint64_t>(b, F(0x9c50)), built = at<uint64_t>(b, F(0x9c58));
     const uintptr_t sb = at<uintptr_t>(b, F(0x9c90)), se = at<uintptr_t>(b, F(0x9c98));
+    // the spectator's Detail Best: the stints' end laps, while the menu is on it (the set
+    // vector is not the descriptor cache, so it is read whether the cache is stale or not)
+    size_t ns = 0;
+    if (stints && vec_ok(sb, se, kStintStride, kMaxStints, ns) && ns) {
+        uint8_t sv[kMaxStints * kStintStride];
+        if (ns == 1 || rd(sb, sv, (ns - 1) * kStintStride)) {
+            t.stint_ok = true;
+            t.stints = int16_t(ns);
+            for (size_t i = 0; i + 1 < ns; ++i) {
+                const uint16_t end = at<uint16_t>(sv, i * kStintStride + 0x74);
+                if (end != 0xffff && int32_t(end) > t.prev_end)
+                    t.prev_end = end;
+            }
+        }
+    }
     if (!built || built_for != version) { // the game rebuilds first (0x142e9e6c0); the reader never calls it
         t.state = 2;
         return;
@@ -713,7 +904,7 @@ void Reader::job_tyres(double now, const Frame &f, int half)
             t.state = 3;
             continue;
         }
-        read_tyre(ptr[vid], t);
+        read_tyre(ptr[vid], t, f.spect && f.spect_detail == 4);
         if (const char letter = checked_letter(t)) {
             t.held = letter;
             t.held_t = now;

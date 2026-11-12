@@ -44,7 +44,7 @@
     // one lit sprite per slat (the slats are tilted, so a horizontal window per level would cut through them)
     const litSlat = (g, left, i, on, onTop) => I.drawSlat(g, left, i, I.slatColour(i, on, onTop), true);
     const centreBase = g => {
-      g.beginPath(); g.arc(0, 0, G.disc.r, 0, 7); g.fillStyle = P.discOuter; g.fill();
+      I.drawCollar(g);
       I.drawCapsule(g, true, 0, 'RECHARGE'); I.drawCapsule(g, false, 0, 'DEPLOY');
       I.drawStripes(g, true, 0, P.brake, P.brakeTop);
       I.drawStripes(g, false, 0, P.throttle, P.throttleTop);
@@ -56,7 +56,7 @@
     // the G-force meter's centre (docs/gmeter/design.md): no capsules, speed labels, Boost, Overtake or battery;
     // the three rings on the disc. The label, value and indicator are sprites of their own.
     const centreBaseG = g => {
-      g.beginPath(); g.arc(0, 0, G.disc.r, 0, 7); g.fillStyle = P.discOuter; g.fill();
+      I.drawCollar(g);
       I.drawStripes(g, true, 0, P.brake, P.brakeTop);
       I.drawStripes(g, false, 0, P.throttle, P.throttleTop);
       I.drawCentreLabels(g);
@@ -65,7 +65,7 @@
     };
     // the F2 halo's centre (docs/halo-car-classes.md 5.1): the standard centre without the Recharge / Deploy capsules
     const centreBaseF2 = g => {
-      g.beginPath(); g.arc(0, 0, G.disc.r, 0, 7); g.fillStyle = P.discOuter; g.fill();
+      I.drawCollar(g);
       I.drawStripes(g, true, 0, P.brake, P.brakeTop);
       I.drawStripes(g, false, 0, P.throttle, P.throttleTop);
       I.drawCentreLabels(g);
@@ -77,7 +77,6 @@
       I.drawBand(g); I.drawWing(g, G.wings.L, -1); I.drawWing(g, G.wings.R, 1);
       I.drawGearTrack(g); I.drawGearMarker(g);
       I.drawGearLabels(g);
-      I.drawTurnLabel(g);
     };
     const rpmPath = (g, a, b) => {
       g.beginPath();
@@ -107,6 +106,8 @@
       ['rails', g => I.drawRails(g, '#FFFFFF')],
       ['arrow_l', g => I.drawTurnArrow(g, false)],
       ['arrow_r', g => I.drawTurnArrow(g, true)],
+      // TURN: its own sprite, shown with the turn number (same leaf), so it never stands alone
+      ['turn_lbl', g => I.drawTurnLabel(g)],
       ['aero_lbl_w', g => I.drawAeroLabel(g, P.white)],
       ['aero_eq_w', g => I.drawAeroBars(g, true, P.aeroBar)],
       ['aero_sl', g => I.drawAeroBars(g, false, P.aeroBar)],
