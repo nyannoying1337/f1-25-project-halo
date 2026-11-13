@@ -37,6 +37,9 @@ is no UDP, no socket, no shared memory and no companion app.
 | Provider | `game_state.hpp`, `game_state_f1_25.cpp` | `IGameStateProvider::sample()` fills `GameState`. Build-checked (`compatible()`); fault-free copies only; never writes |
 | Model | `hud_model.cpp` | Turns `GameState` into what the halo shows (`View`): eased capsule and pedal fills (the 2026 scale and the 2025 cars' 120 kW scale), discrete states unchanged, rival choice, turn number |
 | Leaves | `leaves.hpp` | The `hud_halo_*` view-model leaves (strings and booleans), written only when they change |
+| Animations | `halo_anim.hpp` | When the halo's four motions start: pulse and gate leaves from state the model and the provider already hold; nothing is written while the Animations option is off |
+| Cards | `cards.hpp` | The pit lane timer card's and the lap time card's own leaves (team logo, tyre, final pit time, sector bar steps, the lap time's result colour), from the tower's classification snapshot and the halo's lap distance |
+| Elements | `elements.hpp` | One switch per element (halo dial, timing tower, Race Control banner, pit lane timer, lap time card, pit speed colour): which reads and which publishers run for the elements that are on, and the rule for a replayed moment after the finish (a highlights clip), where the tower is published without gaps |
 | Track data | `halo_track.cpp`, `halo_corners.hpp` | Official corner lists for stock circuits (matched by name and length) |
 | Validation log | `diag_log.cpp` | Optional CSV for the in-game test drive (`tools/ingame/analyze_diag.py`) |
 
@@ -49,7 +52,8 @@ Field provenance, lifecycle and cost: `docs/internal-state/fields.md`.
 | 1. Reference drawing | `tools/halo.js` (canvas, HUD units, origin = dial centre) | the look; theme `authentic` is what the game shows |
 | 2. Sprite export | `tools/native/export_sprites.py` (`tools/export_native.html` + `export_native.js` in headless Edge `--dump-dom`, one sprite per run; `--keep` copies a previous set's sprites unchanged) | 125 RGBA sprites (64 halo, 61 G-force meter) with their HUD-unit bounds, plus G and P |
 | 3. Textures | `export_sprites.py` (or `tools/native/textures.py` for a one-page dump) | PNGs, `sprites.npz` and `sprites.json`; `build_native.py` encodes BC7 |
-| 4. Archives | `tools/native/build_native.py` (`halo_native.py`, `erpbuild.py`, `bc7.py`) | `erp/halo_scene.erp`, `erp/halo_template.erp`, `erp/halo_spectator.erp`, `erp/halo.json` (Swofty overlay ops) built from the game's stock resources; the class halos too (Car classes below) |
+| 4. Archives | `tools/native/build_native.py` (`halo_native.py`, `erpbuild.py`, `bc7.py`), then `tools/tower_native/build_tower.py` (tower, Race Control banner) and `tools/cards_native/build_cards.py` (pit lane timer, lap time card, pit speed colour) | the dial scenes, the HUD and spectator templates and `erp/halo.json` (Swofty overlay ops) built from the game's stock resources; the class halos too (Car classes below) |
+| 4b. Layouts and switches | `tools/native/export_sprites.py --layout cam` and a second build for the Default camera layout, then `tools/native/finish_options.py` | the 14 shipped archives, one set per element, each with the condition in `erp/halo.json` under which the launcher applies it (`erp/halo_scene.erp` and `halo_scene_cam.erp`, `tower_*.erp`, `banner_scene.erp`, `hud_templates.erp` / `hud_templates_bn.erp`, `cards_*.erp`). An element that is switched off keeps the game's own scene |
 | 5. Checks | `check_leaves.py` (template vs DLL leaves; `info.json`, `info_2025.json`, `info_f2.json`), `scene_dump.py` + `sim_page.py` (browser simulation of the built scene; with `dial_complete.idf`, `preview.json` and root `halo_pv`, the HUD editor preview), `class_preview.py` (the 2025, F2 and 2026 halos with the template's decision nodes applied: `docs/halo-car-classes/build/preview.html`), `spectator_preview.py` (the three spectator dials with a watched car's state: `docs/spectator-ui/build/preview.html`) | pass/fail and rendered pages |
 
 Dynamic parts in the built scene:
@@ -59,6 +63,11 @@ Dynamic parts in the built scene:
 - Static windows for the capsule levels.
 - A sliding window over the battery fill.
 - A rotating quad under a texture mask for the RPM bar.
+- The animations' parts: a gradient quad that runs under a mask along each wing's top edge (Overtake / Boost), the
+  lit gear digits on nulls of their own, a white copy of the RPM bar, two movers for the rival line and its copies,
+  and the active-aero bars as two sets of turning bars. At rest every part is where it is without animations.
+- The Default camera layout: the same parts in a symmetric shape, under one null that carries the layout's size and
+  place, so HUD customisation keeps moving and scaling the whole element.
 - The G-force meter (setting `g_meter`, `docs/gmeter/design.md` §8): group `halo_std` (base, Boost, Overtake,
   battery, capsules, speed) shows while it is off; group `halo_gmeter` (hidden in the scene, shown by the template
   while it is on) holds its base, label, 8 segments, 4 white and 4 red bars, and one sprite per value digit and place.
@@ -112,6 +121,10 @@ of the halo in the scene its template drives.
 
 - The renderer never touches memory; only the provider reads it, and only through fault-free copies.
 - No value is invented: a field that cannot be read hides its part of the halo.
-- Discrete states (gear, Boost, Overtake, aero mode, turn) are never interpolated.
+- Discrete states (gear, Boost, Overtake, aero mode, turn) are never interpolated: the state shown is always the
+  game's, and it changes in the frame the game changes it. Four changes are accompanied by a short motion: the lit
+  gear digit ticks, the active-aero bars turn into their new shape, the rival's name rolls over, and a streak runs
+  along the wings on Overtake and Boost. No value is shown in between, live values (speed, RPM, bars, G-meter) are
+  never smoothed, and the Animations option switches the four off.
 - No per-frame scans, no allocations in the read path, no locks or blocking.
 - Any other game build: the provider switches off and the halo uses only the game's own view-model values.

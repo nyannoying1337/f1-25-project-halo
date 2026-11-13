@@ -8,6 +8,8 @@
 #include "../src/tower_reader.hpp"
 #include "../src/diag_log.hpp"
 
+#include <swofty/mixin.hpp>
+
 #include <windows.h>
 
 #include <algorithm>
@@ -2930,25 +2932,50 @@ static int ok_set(void *, const char *, LeafType, const void *) { return 0; }
 // fake game, 10 records a second as in the DLL: every line has the header's 66 columns. Copied to
 // <out>/tower_sample.csv for tools/ingame/analyze_diag.py, whose "Tower: shown values" check must pass on it
 // (the C++ writer and the Python parser agree on the format).
-// The log's sink in the tests: the file under <out>/ instead of the addon's folder (no launcher here).
-static std::string g_log_dir;
-static bool log_file_sink(const char *path, const char *data, size_t n)
+// A stand-in for the core's storage table: appends under <out>/nick.f1-2026-halo/, and refuses any path that is not
+// a plain relative one, as the core does.
+static std::string g_store_root;
+static int g_store_bad = 0;
+static int fake_available(void) { return 1; }
+static int fake_append(const char *path, const void *data, size_t len)
 {
-    CreateDirectoryA((g_log_dir + "/diag").c_str(), nullptr);
-    FILE *f = std::fopen((g_log_dir + "/" + path).c_str(), "ab");
+    std::string rel = path ? path : "";
+    if (rel.empty() || rel[0] == '/' || rel[0] == '\\' || rel.find(':') != std::string::npos ||
+        rel.find("..") != std::string::npos) {
+        ++g_store_bad;
+        return SWOFTY_ASSET_INVALID;
+    }
+    std::string full = g_store_root;
+    for (size_t a = 0, b; a <= rel.size(); a = b + 1) {
+        b = rel.find('/', a);
+        if (b == std::string::npos)
+            b = rel.size();
+        CreateDirectoryA(full.c_str(), nullptr);
+        full += "/" + rel.substr(a, b - a);
+    }
+    FILE *f = std::fopen(full.c_str(), "ab");
     if (!f)
-        return false;
-    bool ok = std::fwrite(data, 1, n, f) == n;
+        return SWOFTY_ASSET_INVALID;
+    bool ok = std::fwrite(data, 1, len, f) == len;
     std::fclose(f);
-    return ok;
+    return ok ? SWOFTY_ASSET_OK : SWOFTY_ASSET_INVALID;
 }
 
 static void test_log_writer(const char *out_dir)
 {
     if (!out_dir)
         return;
-    g_log_dir = out_dir;
-    CHECK(halo::diag::start(log_file_sink));
+    CHECK(!halo::diag::path_utf8()[0]);
+    static SwoftyStorage store{};
+    store.available = fake_available;
+    store.append = fake_append;
+    static SwoftyApi fake{};
+    fake.version = SWOFTY_API_VERSION;
+    fake.storage = &store;
+    g_store_root = std::string(out_dir) + "/nick.f1-2026-halo";
+    swofty::api = &fake;
+    CHECK(halo::diag::start());
+    CHECK(std::string(halo::diag::path_utf8()).rfind("diag/halo_", 0) == 0); // relative: inside the addon's folder
     FakeTower f = make_tower();
     set_pit(f, 4, 3);
     set_gap(f, N - 1 - 4, 4, 0, false, 0, false); // in the pit lane: the game cleared both flags
@@ -3045,8 +3072,9 @@ static void test_log_writer(const char *out_dir)
         ++records;
     }
     Sleep(1500); // the writer drains every 0.5 s
+    CHECK(g_store_bad == 0);
     WIN32_FIND_DATAA fd;
-    const std::string dir = std::string(out_dir) + "/diag/";
+    const std::string dir = std::string(out_dir) + "/nick.f1-2026-halo/diag/";
     HANDLE h = FindFirstFileA((dir + "tower_*.csv").c_str(), &fd);
     CHECK(h != INVALID_HANDLE_VALUE);
     if (h == INVALID_HANDLE_VALUE)

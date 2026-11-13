@@ -47,6 +47,8 @@ struct Settings {
     double auto_period = 10;      // s, 5..60
     int opacity = 100;            // background opacity, % of the design's panel opacity
     bool debug = false;           // the validation log is on
+    bool clip = false;            // a highlights clip plays (elements.hpp ClipLatch): no fastest-lap mark; the
+                                  // caller also switches gaps, arrows and animation off
 };
 
 // Why a row's gap cell holds what it holds (the validation log checks these against the raw reads).

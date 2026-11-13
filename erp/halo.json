@@ -3,6 +3,9 @@
   "ops": [
     {
       "op": "overlay",
+      "when": {
+        "halo_on": true
+      },
       "erps": [
         "2025_asset_groups/ui_package/flow_race.erp",
         "2025_asset_groups/ui_package/flow_options.erp",
@@ -13,19 +16,17 @@
     },
     {
       "op": "overlay",
+      "when": {
+        "halo_on": true,
+        "halo_layout": "camera"
+      },
       "erps": [
         "2025_asset_groups/ui_package/flow_race.erp",
-        "2025_asset_groups/ui_package/flow_options.erp"
-      ],
-      "source": "erp/halo_template.erp"
-    },
-    {
-      "op": "overlay",
-      "erps": [
-        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp",
+        "2025_asset_groups/ui_package/persistent.erp",
         "2025_asset_groups/ui_package/screens/hud_spectator_2.erp"
       ],
-      "source": "erp/halo_spectator.erp"
+      "source": "erp/halo_scene_cam.erp"
     },
     {
       "op": "overlay",
@@ -38,11 +39,86 @@
     },
     {
       "op": "overlay",
+      "when": {
+        "rc_banner": true
+      },
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp",
+        "2025_asset_groups/ui_package/persistent.erp"
+      ],
+      "source": "erp/banner_scene.erp"
+    },
+    {
+      "op": "overlay",
+      "when": {
+        "rc_banner": false
+      },
       "erps": [
         "2025_asset_groups/ui_package/flow_race.erp",
         "2025_asset_groups/ui_package/flow_options.erp"
       ],
-      "source": "erp/tower_template.erp"
+      "source": "erp/hud_templates.erp"
+    },
+    {
+      "op": "overlay",
+      "when": {
+        "rc_banner": true
+      },
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp"
+      ],
+      "source": "erp/hud_templates_bn.erp"
+    },
+    {
+      "op": "overlay",
+      "when": {
+        "pit_card": true
+      },
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp",
+        "2025_asset_groups/ui_package/persistent.erp",
+        "2025_asset_groups/ui_package/screens/hud_spectator_2.erp"
+      ],
+      "source": "erp/cards_pit.erp"
+    },
+    {
+      "op": "overlay",
+      "when": {
+        "lap_card": true
+      },
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp",
+        "2025_asset_groups/ui_package/persistent.erp"
+      ],
+      "source": "erp/cards_lap.erp"
+    },
+    {
+      "op": "overlay",
+      "when": {
+        "lap_card": true
+      },
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp"
+      ],
+      "source": "erp/cards_lap2.erp"
+    },
+    {
+      "op": "overlay",
+      "when": {
+        "rc_banner": true,
+        "pit_banner": true
+      },
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp",
+        "2025_asset_groups/ui_package/persistent.erp"
+      ],
+      "source": "erp/cards_banner.erp"
     },
     {
       "op": "overlay",
@@ -66,6 +142,18 @@
         "2025_asset_groups/ui_package/screens/hud_spectator_2.erp"
       ],
       "source": "erp/tower_spectator.erp"
+    },
+    {
+      "op": "overlay",
+      "when": {
+        "halo_on": true,
+        "halo_layout": "camera"
+      },
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/screens/hud_spectator_2.erp"
+      ],
+      "source": "erp/tower_spectator_cam.erp"
     }
   ]
 }

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "nick.f1-2026-halo",
   "name": "Project Halo",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": "nyannoying",
   "icon": "icons/halo.png",
   "description": "The 2026 F1 world feed's onboard halo for 2026, 2025 and F2 cars, an animated broadcast-style timing tower, the Race Control banner and an optional G-force meter, drawn by F1 25's own HUD. Read from the game itself: no UDP telemetry, no companion app.",
@@ -28,6 +28,54 @@
     }
   ],
   "options": [
+    {
+      "id": "halo_on",
+      "type": "toggle",
+      "label": "Halo dial",
+      "default": true,
+      "binds": "db",
+      "description": "The 2026 broadcast halo in place of the game's dial. Off: the game's own dials for every car, also in HUD customisation; the halo options below then do nothing."
+    },
+    {
+      "id": "tower_on",
+      "type": "toggle",
+      "label": "Timing tower",
+      "default": true,
+      "binds": "native",
+      "description": "A broadcast-style timing tower in place of the Track Position list. Off: the game's own list, lap counter and flag box, also in replays and when spectating. Changes at once."
+    },
+    {
+      "id": "rc_banner",
+      "type": "toggle",
+      "label": "Race Control banner",
+      "default": true,
+      "binds": "db",
+      "description": "The top-centre message box in the 2026 broadcast look: navy, one line, white RACE CONTROL label. Off: the game's own message box."
+    },
+    {
+      "id": "pit_card",
+      "type": "toggle",
+      "label": "Pit lane timer",
+      "default": true,
+      "binds": "db",
+      "description": "The pit lane timer as a broadcast card: position, team logo, name, IN PIT and the time. Off: the game's own pit lane timer."
+    },
+    {
+      "id": "lap_card",
+      "type": "toggle",
+      "label": "Lap time card",
+      "default": true,
+      "binds": "db",
+      "description": "The lap time, sector bar, delta, Best and Previous as a broadcast card. Off: the game's own lap time pills."
+    },
+    {
+      "id": "pit_banner",
+      "type": "toggle",
+      "label": "Pit speed colour",
+      "default": true,
+      "binds": "db",
+      "description": "At pit entry the whole message turns red over the limit and green under it, with PIT LIMIT beside it. Needs Race Control banner. Off: the banner's plain pit speed message."
+    },
     {
       "id": "show_names",
       "type": "toggle",
@@ -61,20 +109,30 @@
       "description": "The halo in F1 25's 2025 cars and in F2 cars too, in place of their dials. 2025 cars: DRS, the ERS deploy mode, the battery and RECHARGE / DEPLOY. F2 cars: DRS, no energy parts. Off: their own dials come back. 2026 cars always show the halo."
     },
     {
+      "id": "halo_layout",
+      "type": "choice",
+      "label": "Halo layout",
+      "values": [
+        {
+          "value": "camera",
+          "label": "Default camera"
+        },
+        {
+          "value": "tv",
+          "label": "TV offset"
+        }
+      ],
+      "default": "camera",
+      "binds": "db",
+      "description": "Default camera: a symmetric halo, larger, on the car's own halo as the default T-cam shows it. TV offset: the broadcast-angle halo at the bottom, as before. A dial you moved in HUD customisation moves up with Default camera."
+    },
+    {
       "id": "validation_log",
       "type": "toggle",
       "label": "Validation log",
       "default": false,
       "binds": "native",
       "description": "Off by default. Records what the halo and the timing tower read from the game as CSV to the addon's diag folder in the game folder (two files, up to 64 MB each per launch) and shows a status line under the tower. Turn on only to send a log."
-    },
-    {
-      "id": "tower_on",
-      "type": "toggle",
-      "label": "Timing tower",
-      "default": true,
-      "binds": "native",
-      "description": "A broadcast-style timing tower from the game's own classification, in place of the Track Position list: move, resize or hide it in HUD customisation. Practice, qualifying, races and Time Trial."
     },
     {
       "id": "tower_mode",
@@ -196,7 +254,7 @@
       "label": "Animations",
       "default": true,
       "binds": "native",
-      "description": "Broadcast-style motion in the timing tower: rows slide when cars change places, the arrow rides in with its row, and the position number and a new best lap time fade in. Off: every change shows at once."
+      "description": "Tower: rows slide when cars change places and a new best lap fades in. Halo: the gear number ticks, the name ahead rolls over, the aero bars turn and a streak runs out on Overtake. Off: every change shows at once."
     }
   ],
   "operations": {

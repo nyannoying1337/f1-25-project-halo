@@ -72,6 +72,18 @@ def main():
     sprites = R.load_sprites(native_out)
     sprites['solid_white'] = {'img': np.full((16, 16, 4), 255, np.uint8)}
     sprites['solid_core'] = {'img': np.tile(np.array([225, 255, 250, 140], np.uint8), (16, 16, 1))}
+    # animations: the white RPM line (white at 90 %) and the Overtake / Boost streak's quad per wing (a
+    # horizontal gradient, clear tail to bright head; the head points outward)
+    sprites['solid_flash'] = {'img': np.tile(np.array([255, 255, 255, 230], np.uint8), (16, 16, 1))}
+    ramp = np.zeros((16, 64, 4), np.uint8)
+    ramp[..., :3] = (200, 255, 246)
+    ramp[..., 3] = np.round(255 * (np.arange(64) / 63.0) ** 1.5).astype(np.uint8)[None, :]
+    sprites['comet_r'] = {'img': ramp}
+    sprites['comet_l'] = {'img': ramp[:, ::-1].copy()}
+    import pngio   # the three as PNGs for the simulator and the flipbook (the other sprites' PNGs come with the set)
+    os.makedirs(os.path.join(work, 'png_gen'), exist_ok=True)
+    for n in ('solid_flash', 'comet_r', 'comet_l'):
+        pngio.write_png(os.path.join(work, 'png_gen', n + '.png'), sprites[n]['img'])
     for base, pv in H.PREVIEW_SPRITES.items():   # the editor preview's team colour (no template tints it there)
         sprites[pv] = {'img': tinted(sprites[base]['img'], H.PREVIEW_TEAM)}
     geo = H.Geo(meta)
@@ -116,6 +128,9 @@ def main():
     spectator, nspec = H.build_spectator(stock[SPECTATOR][0], stock[TEMPLATE][0], info, info25, infof2)
     H.check_spectator_same(template, spectator)
     edge_res = edge.resources()
+    # no halo leaf may share a djb2 hash with another view-model name in the built templates (the game keys
+    # view-model nodes by that hash: two names with one hash are one node, as the tower's rows once showed in game)
+    nnames = H.check_vm_hashes([template, spectator])
 
     os.makedirs(os.path.join(addon, 'erp'), exist_ok=True)
     a = E.Archive(race)
@@ -168,6 +183,10 @@ def main():
     for ci in (info25, infof2):
         json.dump({k: v for k, v in ci.items() if k != 'rpm_static'},
                   open(os.path.join(work, f'info_{ci["cls"]}.json'), 'w'), indent=1)
+    # the animations' timing for the simulator and the checks (the clips' keys are in the info files)
+    json.dump({'seg': H.ANIM_SEG, 'play': H.ANIM_PLAY, 'curve': H.ANIM_CURVE, 'times': H.anim_times(),
+               'gear': [H.GEAR_POP, H.GEAR_POP_S], 'aero': H.AERO_S, 'rival': [H.RIVAL_S, H.RIVAL_BAND, H.RIVAL_FOLD],
+               'glow': [H.GLOW_S, H.GLOW_LEN], 'glow_repeat': H.GLOW_REPEAT}, open(os.path.join(work, 'anim.json'), 'w'), indent=1)
     json.dump({'texts': pinfo['texts'], 'state': {k: v for k, v in H.PREVIEW.items()}, 'team': H.PREVIEW_TEAM,
                'sprites': H.PREVIEW_SPRITES}, open(os.path.join(work, 'preview.json'), 'w'), indent=1)
     print(f'scene {len(stock[H.SCENE][0])} -> {len(scene)} bytes, {info["n_new"]} new elements')
@@ -182,6 +201,11 @@ def main():
           f'{len(clipsf2)} clips, {len(infof2["decisions"])} decision node(s), {len(edge_res)} edge bindings')
     print(f'spectator {len(stock[SPECTATOR][0])} -> {len(spectator)} bytes, {nspec["pv"]} preview control nodes + '
           f'{nspec["2026"]} (2026) + {nspec["2025"]} (2025 cars) + {nspec["f2"]} (F2 cars) halo nodes')
+    for label, ci in (('2026', info), ('2025', info25), ('f2', infof2)):
+        c = ci['anim']['counts']
+        print(f'animations {label}: {c["uixa"]} played nulls, {c["decisions"]} decision nodes, {c["signals"]} signals, '
+              f'{c["rest"]} rest signals on show; clips {len(ci["anims"])}')
+    print(f'view-model names: {nnames} in the two built templates, no halo name shares a djb2 hash')
     print(f'{scene_erp}: {len(a.res)} resources, {size1} bytes')
     print(f'{tmpl_erp}: {size2} bytes')
     print(f'{spec_erp}: {size3} bytes')

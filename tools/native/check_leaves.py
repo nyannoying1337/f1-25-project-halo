@@ -23,6 +23,9 @@ def main():
             bound.add(db)
         for d in info.get('decisions', []):   # decision nodes read game values only (MVCD / SVCD dbEntry)
             bound.add(d['db'])
+        for d in (info.get('anim') or {}).get('decisions', []):   # the animations' pulse leaves and game values
+            if d.get('db'):                                       # (a timer node reads nothing)
+                bound.add(d['db'])
     halo = {b[len(PREFIX):] for b in bound if b.startswith(PREFIX + 'hud_halo_')}
     native = sorted(b for b in bound if not b.startswith(PREFIX + 'hud_halo_'))
     missing = sorted(halo - written)

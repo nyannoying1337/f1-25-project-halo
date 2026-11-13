@@ -32,6 +32,18 @@ rem the G-force meter
 "%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O1 -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX -I include ^
   -o build\test_gmeter.exe tests\test_gmeter.cpp src\gmeter.cpp src\hud_model.cpp src\halo_track.cpp || exit /b 1
 build\test_gmeter.exe || exit /b 1
+rem the halo's animations
+"%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O1 -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX -I include ^
+  -o build\test_halo_anim.exe tests\test_halo_anim.cpp || exit /b 1
+build\test_halo_anim.exe || exit /b 1
+rem the broadcast cards' leaves (writes build\cards_leaves.txt)
+"%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O1 -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX -I include ^
+  -o build\test_cards.exe tests\test_cards.cpp src\tower_reader.cpp src\tower_state.cpp || exit /b 1
+build\test_cards.exe build || exit /b 1
+rem the element switches and the highlights clip rule
+"%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O1 -Wall -Wextra -I include ^
+  -o build\test_elements.exe tests\test_elements.cpp || exit /b 1
+build\test_elements.exe || exit /b 1
 "%ZIG%" c++ -target x86_64-windows-gnu -std=c++20 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -I include -shared -s ^
   -o halo_hud.dll src\halo_hud.cpp src\game_state_f1_25.cpp src\hud_model.cpp src\diag_log.cpp src\halo_track.cpp ^
   src\gmeter.cpp src\tower_reader.cpp src\tower_model.cpp src\tower_leaves.cpp src\tower_anim.cpp ^

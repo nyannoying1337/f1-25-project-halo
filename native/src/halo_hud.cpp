@@ -18,10 +18,13 @@
 #include <swofty/hud.hpp>
 #include <swofty/mixin.hpp>
 
+#include "elements.hpp"
 #include "diag_log.hpp"
 #include "game_state_f1_25.hpp"
+#include "halo_anim.hpp"
 #include "hud_model.hpp"
 #include "leaves.hpp"
+#include "cards.hpp"
 #include "tower_anim.hpp"
 #include "tower_leaves.hpp"
 #include "tower_model.hpp"
@@ -37,6 +40,13 @@ SWOFTY_SETTING(bool, show_turns, true);
 SWOFTY_SETTING(bool, g_meter, false);
 SWOFTY_SETTING(bool, all_cars, true);
 SWOFTY_SETTING(bool, validation_log, false);
+// one switch per element (elements.hpp). tower_on is live; the others go into the launcher's build (their
+// archives are applied or left out), so they are read once at start and stay what this launch was built with
+SWOFTY_SETTING(bool, halo_on, true);
+SWOFTY_SETTING(bool, rc_banner, true);
+SWOFTY_SETTING(bool, pit_card, true);
+SWOFTY_SETTING(bool, lap_card, true);
+SWOFTY_SETTING(bool, pit_banner, true);
 // timing tower (swofty.json "tower*" options; read 4 times a second)
 SWOFTY_SETTING(bool, tower_on, true);
 SWOFTY_SETTING(std::string_view, tower_mode, "compact");
@@ -67,6 +77,8 @@ struct App {
     gs::GameState state;
     HudModel model;
     Leaves leaves;
+    HaloAnim hanim;                    // the halo's animations
+    AnimStats hanim_logged;            // its counts at the last summary line
     double wall = 0, last_diag = -1, last_summary = -100;
     // own CPU time per frame (QueryPerformanceCounter), accumulated between validation-log records
     double qpc_us = 0, cost_sum = 0, cost_max = 0;
@@ -80,8 +92,14 @@ struct App {
     float last_shift = 0;
     // timing tower
     bool tower_reads = false;          // the provider is compatible: the reader has this build's keys
+    el::Elements elements;             // the build-time switches as read at start (tower: live, A.tset.enabled)
+    bool was_sampling = true;          // the game-state sample ran last frame
+    el::ClipLatch clip_latch;          // a highlights clip (a replayed moment after the finish)
+    bool clip = false, clip_sent = false;
+    double clip_sent_t = -100;
     tower::Reader treader;
     tower::Model tmodel;
+    cards::Cards cards;                // 0.2.2: the broadcast cards' leaves (cards.hpp)
     tower::Anim tanim;                 // the rows' motion packets (fixed arrays, about 8 KB)
     std::unique_ptr<tower::Publisher> tpub; // the leaf table (about 230 KB), built once
     tower::Settings tset;
@@ -99,6 +117,17 @@ struct App {
     float t_read_us = 0, t_model_us = 0, t_pub_us = 0;
     int t_writes = 0, t_halo_writes = 0;
 } g_app;
+
+bool halo_anim_set(void *, const char *path, bool value)
+{
+    return swofty::hud::set(path, value) == swofty::hud::Result::ok;
+}
+
+// the broadcast cards' leaves (cards.hpp): bools and texts
+bool cards_set(void *, const char *path, bool is_text, bool value, const char *text)
+{
+    return (is_text ? swofty::hud::set(path, text) : swofty::hud::set(path, value)) == swofty::hud::Result::ok;
+}
 
 bool tower_copy(void *, uintptr_t addr, void *dst, size_t n)
 {
@@ -143,6 +172,16 @@ void init(App &A)
     }
     read_tower_settings(A);
     A.last_tset = 0;
+    A.elements.halo = halo_on;
+    A.elements.banner = rc_banner;
+    A.elements.pit_card = pit_card;
+    A.elements.lap_card = lap_card;
+    A.elements.pit_banner = pit_banner;
+    swofty::log("[halo-re] elements: halo dial %s, timing tower %s (live), Race Control banner %s, pit lane timer %s, "
+                "lap time card %s, pit speed colour %s",
+                A.elements.halo ? "on" : "off", A.tset.enabled ? "on" : "off", A.elements.banner ? "on" : "off",
+                A.elements.pit_card ? "on" : "off", A.elements.lap_card ? "on" : "off",
+                A.elements.pit_banner ? "on" : "off");
     swofty::log("[halo-re] game state: %s (build %s, bindings %s%s%s, track name %s)", A.provider->describe(),
                 build ? "d873a1c8 matches" : "differs", resolved ? "resolved" : "missing ", resolved ? "" : missing,
                 "", sym.track_world ? "found" : "not found");
@@ -151,11 +190,9 @@ void init(App &A)
                     "shows nothing it cannot read");
     if (validation_log) {
         if (diag::start())
-            swofty::log("[halo-re] validation log: swofty/addons/nick.f1-2026-halo/%s in the game folder",
-                        diag::path_utf8());
+            swofty::log("[halo-re] validation log: swofty/addons/nick.f1-2026-halo/%s", diag::path_utf8());
         else
-            swofty::log("[halo-re] validation log: could not create the file in the addon's folder (the launcher's "
-                        "storage is not available)");
+            swofty::log("[halo-re] validation log: the launcher's storage is not available, nothing is recorded");
     }
 }
 
@@ -244,6 +281,17 @@ void log_transitions(App &A)
             swofty::log("[halo-re] tower: %d cars, rows %d from %d, %s, read %.1f us model %.1f us leaves %.1f us (%d writes)",
                         tv.count, tv.rows, tv.start, tv.dbg, A.t_read_us, A.t_model_us, A.t_pub_us, A.t_writes);
         A.last_summary = A.wall;
+        {
+            // what the halo's animations started since the last summary line (nothing while Animations is off)
+            const AnimStats &n = A.hanim.stats(), &o = A.hanim_logged;
+            if (n.pops != o.pops || n.boosts != o.boosts || n.rolls != o.rolls || n.settles != o.settles ||
+                n.rolls_at_once != o.rolls_at_once || n.pops_busy != o.pops_busy || n.boost_repeats != o.boost_repeats)
+                swofty::log("[halo-re] halo animations: gear pops %u (+%u busy), Boost streaks %u (+%u repeats, +%u busy), "
+                            "rival rolls %u (+%u at once), settles %u, rests %u",
+                            n.pops, n.pops_busy, n.boosts, n.boost_repeats, n.boosts_busy, n.rolls, n.rolls_at_once,
+                            n.settles, n.rests);
+            A.hanim_logged = n;
+        }
         const gs::F1_25Raw &r = A.provider->raw();
         swofty::log("[halo-re] %s%.0f km/h (dist %.0f) gear %d rpm %.0f thr %.2f brk %.2f | E %.2f MJ hk %.0f kW dp %.0f "
                     "kW mode %d flags %02x%02x%02x%02x | lap %d %.0f m rank %d/%d",
@@ -274,9 +322,41 @@ void frame(double dt, void *)
     if (!A.init)
         init(A);
     const double t0 = qpc_now_us(A);
-    A.provider->sample(A.wall, A.state);
-    A.model.update(A.state, dt, HudConfig{bool(show_names), bool(show_turns), bool(g_meter), bool(all_cars)});
-    const int halo_writes = publish(A.leaves, A.model.view(), A.wall);
+    // what the elements that are on need (elements.hpp); the tower's switch is live
+    el::Elements now_on = A.elements;
+    now_on.tower = A.tset.enabled;
+    const el::Needs need = el::needs(now_on);
+    static const gs::GameState kNoState{}; // nothing read: every part fails closed on it
+    if (need.sample)
+        A.provider->sample(A.wall, A.state);
+    else if (A.was_sampling)
+        A.state = kNoState; // no element reads the game: the last sample must not live on
+    A.was_sampling = need.sample;
+    // the halo off: its model runs on the empty state (no read) and publishes the blank halo, 2025 / F2 dials stock
+    A.model.update(need.halo ? A.state : kNoState, dt,
+                   HudConfig{bool(show_names), bool(show_turns), bool(g_meter), bool(all_cars) && need.halo});
+    int halo_writes = publish(A.leaves, A.model.view(), A.wall);
+    {
+        // the halo's animations, from the view just published and state the provider already validated. The
+        // Animations option (read with the tower's settings, 4 times a second) switches them off: no leaf is written
+        const View &hv = A.model.view();
+        AnimIn ai;
+        ai.enabled = A.tset.animation && need.halo;
+        ai.live = hv.live;
+        ai.subject = A.state.session.subject;
+        ai.gear_ok = hv.gear_ok;
+        ai.gear = hv.gear;
+        ai.boost = hv.boost;
+        ai.rival_id = hv.rival_id;
+        ai.rev_ok = A.state.power_unit.rpm_ok && A.state.power_unit.limiter_ok;
+        ai.rpm = A.state.power_unit.rpm;
+        ai.limiter_rpm = A.state.power_unit.limiter_rpm;
+        ai.lap_ok = A.state.progress.ok;
+        ai.lap_m = A.state.progress.lap_m;
+        ai.track_m = A.state.session.track_ok ? A.state.session.track_length_m : 0.f;
+        A.hanim.update(ai, A.wall);
+        halo_writes += A.hanim.flush(A.wall, kAnimWrites, halo_anim_set, nullptr);
+    }
     const double t1 = qpc_now_us(A);
     const double cost = t1 - t0;
     A.cost_sum += cost;
@@ -311,13 +391,68 @@ void frame(double dt, void *)
     f.spect_gap = st.spectate.gap;
     f.spect_detail = st.spectate.detail;
     f.frame_no = uint32_t(st.frame); // the hdk events' frame (the logs' frame column)
-    if (A.tower_reads && A.tset.enabled)
+    if (A.tower_reads && need.reader) // for the tower or a card, whichever is on
         A.treader.update(A.wall, f);
     const double t2 = qpc_now_us(A);
-    A.tmodel.update(A.treader.snapshot(), f, A.tset, A.wall);
-    A.tanim.update(A.tmodel.view(), f, A.tmodel, A.wall); // after the model, from what it publishes
+    // the model also runs for the lap card alone (its lap time flash); the tower's leaves then show the off
+    // state, not the model
+    tower::Settings mset = A.tset;
+    mset.enabled = need.tower_model;
+    if (A.clip) {
+        // in a clip the order, laps and tyres are the moment's; the gaps are the final ones, and every jump
+        // between clips would fire arrows and slides: the reduced tower
+        mset.clip = true;
+        mset.gaps = false;
+        mset.arrows = false;
+        mset.animation = false;
+    }
+    A.tmodel.update(A.treader.snapshot(), f, mset, A.wall);
+    static const tower::View kTowerOff{};
+    const tower::View &shown = need.tower_publish ? A.tmodel.view() : kTowerOff;
+    A.tanim.update(shown, f, A.tmodel, A.wall); // after the model, from what it publishes
     const double t3 = qpc_now_us(A);
-    A.t_writes = A.tpub->publish(A.tmodel.view(), A.wall, std::max(0, tower::kFrameBudget - halo_writes), &A.tanim);
+    A.t_writes = A.tpub->publish(shown, A.wall, std::max(0, tower::kFrameBudget - halo_writes), &A.tanim);
+    {
+        // the clip state for the next frame's model, and two leaves for the replay screen's decisions
+        // (written on change and every 2 s: the game can rebuild its view model)
+        const tower::View &mv = A.tmodel.view();
+        const bool clip = need.tower_publish && A.clip_latch.update(mv.on, mv.chq, f.generation, st.vehicle.ai_driving);
+        if (clip != A.clip)
+            swofty::log("[halo-re] tower: highlights clip %s (leader lap %s)", clip ? "on" : "off", mv.lap[0] ? mv.lap : "-");
+        A.clip = clip;
+        if (clip != A.clip_sent || A.wall - A.clip_sent_t >= 2.0 || A.wall < A.clip_sent_t) {
+            const bool ok1 = swofty::hud::set("view_model_data.hud_tt_rclip", clip) == swofty::hud::Result::ok;
+            const bool ok2 = swofty::hud::set("view_model_data.hud_tt_nrclip", !clip) == swofty::hud::Result::ok;
+            if (ok1 && ok2) {
+                A.clip_sent = clip;
+                A.clip_sent_t = A.wall;
+            }
+        }
+    }
+    {
+        // 0.2.2: the broadcast cards, from the tower's snapshot and the halo's lap distance; after the tower,
+        // with what is left of the frame's write budget (at most cards::kCardWrites)
+        cards::In ci;
+        ci.live = A.tower_reads && need.cards; // no longer the Timing tower option
+        ci.vid = A.player;
+        ci.lap_m = f.player_lap_m;
+        if (A.player >= 0 && A.player < tower::kCars)
+            ci.flash = A.tmodel.view().fx[A.player]; // the tower's own best-lap flash (timed sessions)
+        ci.snap = &A.treader.snapshot();
+        A.cards.update(ci, A.wall);
+        const int left = std::max(0, tower::kFrameBudget - halo_writes - A.t_writes);
+        A.cards.flush(A.wall, std::min(left, cards::kCardWrites), cards_set, nullptr);
+        // one log line when the white bar's sector changes (a few per lap): what the cards' leaves were asked
+        // to show, for checking a session against a capture
+        static int last_sector = -1;
+        if (A.cards.sector() != last_sector) {
+            last_sector = A.cards.sector();
+            swofty::log("[halo-re] cards: bar in sector %d, %d steps, lap %.0f m, %u bool writes, %u refused; the sector "
+                        "before: up to %d steps, %u step-on writes",
+                        last_sector, A.cards.steps(), double(ci.lap_m), A.cards.written(), A.cards.failed(),
+                        A.cards.left_peak(), A.cards.left_on());
+        }
+    }
     const double t4 = qpc_now_us(A);
     A.t_read_us = float(t2 - t1);
     A.t_model_us = float(t3 - t2);

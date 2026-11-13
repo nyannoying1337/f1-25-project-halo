@@ -1,6 +1,6 @@
 <!doctype html>
 <!-- icon.html - draws the addon icon (icons/halo.png) from tools/halo.js: the 2026 dial with its collar, centred and
-     whole, over a flat mid grey (so that the
+     whole, over a flat grey (the middle stop of the halo renders' neutral backdrop, tools/gmeter/render.html, so the
      dark lower collar keeps an edge against it). make_icon.py runs it through a
      headless browser (--dump-dom) and reads {fontLoaded, png} from <pre id="out">.
      URL: ?size=<px, default 256>&scale=<px per HUD unit, default 2.95> -->
@@ -9,11 +9,11 @@
 </head><body><pre id="out">running</pre>
 <script src="../halo.js"></script>
 <script>
-  // a typical racing state: 201 km/h, OVERTAKE lit, battery 60 %
+  // the state every halo comparison uses (tools/gmeter/render.py BASE): 201 km/h, OVERTAKE lit, battery 60 %
   const STATE = { kmh: 201, boost: false, ot: true, recharge: 0, deploy: 1, throttle: 1, brake: 0, soc: 0.6, aero: false,
                   aeroTint: false, gear: 5, rpm: 0.55, turn: 5, turnDir: 'L', driver: 'CAMARA', pos: 15, rival: 'COLAPINTO',
                   rivalPos: 14, team: '#B6BABD', theme: 'authentic' };
-  function backdrop(g, w, h) {   // flat grey, behind the translucent collar top and face
+  function backdrop(g, w, h) {   // flat: the render backdrop's middle stop, behind the translucent collar top and face
     g.fillStyle = '#3f464b'; g.fillRect(0, 0, w, h);
   }
   (async () => {

@@ -24,3 +24,16 @@ echo "tower leaf list: $O/tower_leaves.txt"
   -I "$HERE/include" -o "$O/test_gmeter.exe" \
   "$HERE/tests/test_gmeter.cpp" "$HERE/src/gmeter.cpp" "$HERE/src/hud_model.cpp" "$HERE/src/halo_track.cpp"
 "$O/test_gmeter.exe"
+# the halo's animations: triggers, snap rules, pulse rules, Animations off, cost
+"$ZIG" c++ -target x86_64-windows-gnu -std=c++20 -O1 -g -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX \
+  -I "$HERE/include" -o "$O/test_halo_anim.exe" "$HERE/tests/test_halo_anim.cpp"
+"$O/test_halo_anim.exe"
+# the broadcast cards' leaves: rules, fail-closed inputs, write rules (writes $O/cards_leaves.txt)
+"$ZIG" c++ -target x86_64-windows-gnu -std=c++20 -O1 -g -Wall -Wextra -DWIN32_LEAN_AND_MEAN -DNOMINMAX \
+  -I "$HERE/include" -o "$O/test_cards.exe" "$HERE/tests/test_cards.cpp" "$HERE/src/tower_reader.cpp" \
+  "$HERE/src/tower_state.cpp"
+"$O/test_cards.exe" "$O"
+# the element switches: what runs for every combination, and the highlights clip rule
+"$ZIG" c++ -target x86_64-windows-gnu -std=c++20 -O1 -g -Wall -Wextra -I "$HERE/include" -o "$O/test_elements.exe" \
+  "$HERE/tests/test_elements.cpp"
+"$O/test_elements.exe"

@@ -236,7 +236,7 @@ def main():
     # the halo must be built first: its ops in halo.json, its template in halo_template.erp
     ops_path = os.path.join(a.addon, 'erp', 'halo.json')
     ops = json.load(open(ops_path))
-    halo_ops = [o for o in ops['ops'] if not o['source'].startswith('erp/tower_')]
+    halo_ops = [o for o in ops['ops'] if not o['source'].startswith(('erp/tower_', 'erp/cards_'))]
     if [o['source'] for o in halo_ops] != HALO_SOURCES:
         raise SystemExit(f'{ops_path}: expected the halo ops {HALO_SOURCES}, found {[o["source"] for o in halo_ops]}')
     halo_tmpl = E.read_all(os.path.join(a.addon, 'erp', 'halo_template.erp'))[TEMPLATE][1][0]

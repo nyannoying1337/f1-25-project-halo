@@ -27,6 +27,18 @@ import uinode as N  # noqa: E402
 
 K = 0.018                    # scene units per HUD unit
 BR_Y = -0.288                # stock br_customisation y: the base sprite's bottom edge
+# the layout 'cam' ("Default camera"): the halo 4/3 as large with its dial centre at
+# FIT_CENTRE of the screen's height, where the default camera shows the car's own halo bar (measured on one
+# capture). The place is inside the element: a null zh_fit between the dial's content and the halo's root, so the
+# HUD editor's move / scale / fade keep acting on the whole element. The scene's own pose is the fitted one; zh_fit's
+# clip holds today's place and size at fraction FIT_TV (rest pose at both ends, as every played null), and the
+# spectator dials' groups send it there when they show (the spectator HUD draws the same scenes at the bottom right).
+FIT_SCALE = 4.0 / 3.0
+FIT_CENTRE = 0.65902         # dial centre, share of the screen height from the top (741.4 of 1125)
+SCREEN_H = 10.8              # scene units (16:9; 19.2 wide)
+DIAL_Y = {None: 0.63, '2025': 0.63, 'f2': 0.41}   # the dial elements' stock height above the screen's bottom (hud_layouts.uidl)
+TV_HALO_Y = -0.288 + 0.018 * 117.83333333333334   # today's halo null: BR_Y + K * the 'tv' base sprite's bottom edge
+FIT_NULL, FIT_NODE, FIT_TV = 'zh_fit', 'x_fit', 0.5
 SCENE = 'eaid://ui_package/art/osd/components/dial/dial_om_xm.idf'
 MESH = SCENE + '/central_bg_fill?context=render'
 STRTAB = SCENE + '?context=animstringtable&file=0'
@@ -79,6 +91,62 @@ TEMPLATE_PARENT = 'hud_f1_dial_om_xm.osd_visibility_option.f1_om_xm_dial_child'
 ANIM_NODES = ['zh_batt_ctr_anim', 'zh_batt_win_anim', 'zh_rpm_anim', 'zh_rpm_core_anim']   # sorted: appended to the table
 STOCK_KIDS = ('frame', 'fuel', 'holder_central', 'pit_indicator')
 NLEVEL = 16
+
+# Animations: the halo's own motions. Each animated null has one clip: fraction = clip
+# time 0..1, one segment ANIM_SEG played in ANIM_PLAY seconds by goToFraction(a) + playToFraction(ANIM_CURVE, b); the
+# motion's shape is keyed into the segment (the game plays a linear curve over its period whatever the span, as the
+# tower's rows proved in game), and every key outside it is the null's rest pose.
+ANIM_SEG = (0.10, 0.90)
+ANIM_PLAY = 0.75                              # s: ANIM_CURVE's period (native/src/halo_anim.hpp kPlay)
+ANIM_CURVE = 'bc_grid_rundown_item_current'   # linear, 0.75 s, steepness 1 (the tower's curve)
+ANIM_KEYS = 48                                # key intervals in the segment
+ANIM_EPS = 0.005
+GEAR_POP, GEAR_POP_S = 0.40, 0.16             # the lit digit starts 40 % larger, back at size in 0.16 s
+AERO_S = 0.25                                 # the active-aero bars' turn
+RIVAL_S, RIVAL_BAND, RIVAL_FOLD = 0.50, 7.0, 0.001   # the rival line's roll: seconds, band height (HUD), folded scale
+GLOW_S, GLOW_LEN = 0.75, 55.0                 # the Overtake / Boost streak: seconds, length (HUD)
+GLOW_REPEAT = 1.0                             # s between two streaks while the mode stays on (halo_anim.hpp kAnimRepeat)
+ANIM_BOOLS = ('xan', 'xrl', 'xbo', 'xgr', 'xrv', 'xrr')   # + xg0..xg8, gv00..gv23 (native/src/halo_anim.hpp)
+
+
+def ease3(p):
+    p = min(max(p, 0.0), 1.0)
+    return 1.0 - (1.0 - p) ** 3
+
+
+def anim_times():
+    a, b = ANIM_SEG
+    return [0.0, a - 2 * ANIM_EPS, a - ANIM_EPS] + [a + (b - a) * i / ANIM_KEYS for i in range(ANIM_KEYS + 1)] + \
+           [b + ANIM_EPS, 1.0]
+
+
+def anim_track(rest, fn):
+    """Keys for anim_times(): rest, rest, fn(0) just before the segment, fn over the play's seconds, rest, rest.
+    fn(ANIM_PLAY) must be the rest pose (checked), so a play ends at rest."""
+    end = fn(ANIM_PLAY)
+    assert max(abs(x - y) for x, y in zip(end, rest)) < 1e-6, ('a motion must end at rest', end, rest)
+    return [tuple(rest)] * 2 + [tuple(fn(0.0))] + [tuple(fn(ANIM_PLAY * i / ANIM_KEYS)) for i in range(ANIM_KEYS + 1)] + \
+           [tuple(rest)] * 2
+
+
+def _lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def _go(node, f):
+    return [node, 'goToFraction', {'value': float(f)}]
+
+
+def _play(node, f=None):
+    return [node, 'playToFraction', {'curveName': U.djb2(ANIM_CURVE), 'value': float(ANIM_SEG[1] if f is None else f)}]
+
+
+def _start(*nodes):
+    """The signals that start a motion on each node: jump to the segment's start, play to its end."""
+    out = []
+    for n in nodes:
+        out += [_go(n, ANIM_SEG[0]), _play(n)]
+    return out
 
 # HUD editor preview. The editor (screens/hud_customisation.ui) shows the dial group's leader, hud_layouts.uidl's
 # dial_f1 = dial_complete.idf, with no template driving it: the scene's own state plus its .uipre preview data. So the
@@ -154,8 +222,55 @@ class Geo:
     def __init__(self, meta):
         self.G, self.sp = meta['G'], meta['sprites']
         self.T0, self.T1 = meta['RPM_T0'], meta['RPM_T1']
+        self.glow_x0 = meta.get('GLOW_X0', 40)    # where the streak's mask starts (export_native.js)
         self.CS = self.G['centreScale']
         self.halo_y = BR_Y + K * self.sp['base']['y1']
+        self.layout = meta.get('LAYOUT', 'tv')
+        self.cam = self.layout == 'cam'
+
+    def fit_y(self, cls=None):
+        """'cam': the halo's dial centre above the dial element's root, scene units, at the stock layout position"""
+        return (1.0 - FIT_CENTRE) * SCREEN_H - DIAL_Y[cls]
+
+    def place(self, B, bc, name, cls=None, hidden=False, live=True):
+        """The halo's root null under the dial's content bc. 'tv': at halo_y, as ever. 'cam': at the fitted place
+        and size; a live halo's root hangs under the fit null (FIT_NULL, one per scene), the editor copy carries
+        the pose itself. -> the root"""
+        if not self.cam:
+            root = B.null(name, (0.0, self.halo_y, 0.0), hidden=hidden)
+            bc['children'].items.append(root)
+            return root
+        pos, sc = (0.0, self.fit_y(cls), 0.0), (FIT_SCALE, FIT_SCALE, 1.0)
+        if not live:
+            root = B.null(name, pos, scale=sc, hidden=hidden)
+            bc['children'].items.append(root)
+            return root
+        fit = B.null(FIT_NULL, pos, scale=sc, anim=True)
+        root = B.null(name, (0.0, 0.0, 0.0), hidden=hidden)
+        fit['children'].items.append(root)
+        bc['children'].items.append(fit)
+        return root
+
+    def fit_clip(self, ani, cls=None):
+        """'cam': the fit null's clip into the scene's animation set: the fitted pose at both ends, today's place
+        and size through the whole segment (FIT_TV lies in it). No race template node plays it."""
+        if not self.cam:
+            return
+        n = len(anim_times())
+        rest_p, rest_s = (0.0, self.fit_y(cls), 0.0), (FIT_SCALE, FIT_SCALE, 1.0)
+        tv_p, tv_s = (0.0, TV_HALO_Y, 0.0), (1.0, 1.0, 1.0)
+        assert ANIM_SEG[0] < FIT_TV < ANIM_SEG[1]
+        ani['clips'][FIT_NULL] = dict(pos=[rest_p] * 2 + [tv_p] * (n - 4) + [rest_p] * 2, rot=None,
+                                      scale=[rest_s] * 2 + [tv_s] * (n - 4) + [rest_s] * 2)
+        ani['fit'] = (FIT_NODE, FIT_NULL)
+
+    def box(self, cls=None):
+        """The customisation box (tl, br) in the dial content's frame: the base sprite's footprint where it draws"""
+        x0, y0, x1, y1 = self.rect('base')
+        if not self.cam:
+            return (K * x0, self.halo_y + K * -y0), (K * x1, BR_Y)
+        k, y = K * FIT_SCALE, self.fit_y(cls)
+        return (k * x0, y - k * y0), (k * x1, y - k * y1)
 
     @staticmethod
     def S(u, v):
@@ -412,7 +527,8 @@ def _halo(B, geo, halo, pv=None, cls=None):
     cls None: the 2026 halo. cls '2025' / 'f2': that car class's live halo (CLASSES): element names start with its
     root's name; the DRS pill replaces the active-aero symbol; 2025 cars show the ERS mode in the pill area and the
     capsules on the 120 kW scale, F2 cars no battery, capsules or pills.
-    -> (vis, texts, xas, colours, rpm keys, battery keys, preview texts [(element, text)], shows, decisions)"""
+    -> (vis, texts, xas, colours, rpm keys, battery keys, preview texts [(element, text)], shows, decisions,
+        anim: the animations' nulls, clips and decision nodes (game halos only; None in the preview))"""
     G, CS, S = geo.G, geo.CS, geo.S
     game = pv is None
     cl = CLASSES[cls] if cls else None
@@ -426,6 +542,18 @@ def _halo(B, geo, halo, pv=None, cls=None):
     shows = []    # (template node name, element, static visible): parts a decision node shows and hides
     decisions = []  # the decision nodes (car classes): MVCD / SVCD, their bindings and their events' show / hide
     pv_texts = []
+    # animations: clips {anim null: {pos, rot, scale: key lists for anim_times()}}, uixa [(template node, null)],
+    # decisions (as above, a signal may carry attributes), rest [(template node)]: every played null, for the rest
+    # signals. The editor preview has none.
+    ani = dict(clips={}, uixa=[], decisions=[], rest=[]) if game else None
+    IDENT = (-0.0, -0.0, 0.0, -1.0)
+
+    def played(null, short, pos=None, rot=None, scale=None):
+        """Register an anim null a UIXA plays: its clip's tracks (a constant where None) and its template node."""
+        ani['clips'][null] = dict(pos=pos, rot=rot, scale=scale)
+        ani['uixa'].append(('x_' + short, null))
+        ani['rest'].append('x_' + short)
+        return 'x_' + short
 
     def lit(db, neg=False):
         """preview: does the part bound to db (negated: to not db) show"""
@@ -507,8 +635,44 @@ def _halo(B, geo, halo, pv=None, cls=None):
         # Active Aero: '=' in straight mode, '//' in corner mode, white in both (docs/research 3.9)
         straight = NATIVE['aero_straight']
         shown('aero_lbl', 'aero_lbl_w')
-        shown('aero_eq', 'aero_eq_w', straight)
-        shown('aero_sl', 'aero_sl', straight, True)
+        # the two sprites show while the animations' gate (leaf xan) is off or absent; while it is on, the
+        # animated bars do (below). The preview keeps the plain sprites.
+        ast = group('aero_st', leaf('xan'), True, default=True) if game else halo
+        shown('aero_eq', 'aero_eq_w', straight, parent=ast)
+        shown('aero_sl', 'aero_sl', straight, True, parent=ast)
+        if game:
+            # Two sets of two bars. Set e shows while straight mode is on and rests as "="; set s shows while it is
+            # off and rests as "//". Which set shows is the plain binding, so the shape at rest is always the game's
+            # state; the SVCD an_xm plays each set's arrival from the other shape. A bar = an anim null at its rest
+            # centre, turned to the bar's angle (so its scale runs along the bar), a counter-turned null, and the
+            # bar's own sprite: at rest the sprite sits exactly where aero_eq_w / aero_sl draw that bar.
+            a = G['aero']
+            poses = {True: lambda sg: ((a['barX'] + sg * a['barDx'] / 2, a['barY'] + sg * a['barDy'] / 2), a['barAng'], a['barLen'], a['barTh']),
+                     False: lambda sg: ((a['barX'] + sg * a['slHx'], a['barY'] + sg * a['slHy']), a['slAng'], a['slLen'], a['slTh'])}
+            aan = group('aero_an', leaf('xan'), default=False, hidden=True)
+            sets = {}
+            for key, is_eq in (('e', True), ('s', False)):
+                sg_null = group('aero_' + key, straight, not is_eq, parent=aan)
+                sets[key] = []
+                for k, sgn in enumerate((1, -1)):
+                    (rc, rang, rlen, rth), (sc_, sang, slen, sth) = poses[is_eq](sgn), poses[not is_eq](sgn)
+                    c = at(*rc)
+                    null = f'zh_aero_{key}{k}_anim'
+                    A = B.null(null, c, rot_deg=-rang, anim=True)
+                    Cn = B.null(f'{pfx}aero_{key}{k}_c', (0.0, 0.0, 0.0), rot_deg=rang)
+                    B.kids(sg_null, B.kids(A, B.kids(Cn, sprite_quad(f'{pfx}aero_{key}{k}', f'aero_{key}{k}', 22, c))))
+
+                    def pose(tau, rc=rc, rang=rang, rlen=rlen, rth=rth, sc_=sc_, sang=sang, slen=slen, sth=sth):
+                        e = ease3(tau / AERO_S)
+                        return (at(_lerp(sc_[0], rc[0], e), _lerp(sc_[1], rc[1], e)), _lerp(sang, rang, e),
+                                (_lerp(slen / rlen, 1.0, e), _lerp(sth / rth, 1.0, e), 1.0))
+                    sets[key].append(played(
+                        null, f'aero_{key}{k}',
+                        pos=anim_track(c, lambda t, pose=pose: pose(t)[0]),
+                        rot=anim_track(quat_z(-rang), lambda t, pose=pose: tuple(quat_z(-pose(t)[1]))),
+                        scale=anim_track((1.0, 1.0, 1.0), lambda t, pose=pose: pose(t)[2])))
+            ani['decisions'].append(dict(type='SVCD', name='an_xm', db=straight, value=['bool', True],
+                                          events=[['yes', _start(*sets['e'])], ['no', _start(*sets['s'])]]))
     else:
         # the DRS pill in the active-aero spot (doc 2.3): one sprite per look, shown by an MVCD on the game's
         # drs_pit_state like the stock DRS widget's; grey until the first state arrives
@@ -518,7 +682,24 @@ def _halo(B, geo, halo, pv=None, cls=None):
                                       for state, look in DRS_STATES.items()]))
     for i in range(9):   # unlit digit while not engaged (shown when the leaf is absent), lit digit while engaged
         shown(f'go{i}', f'gear_off_{i}', leaf(f'g{i}'), True)
-        shown(f'g{i}', f'gear_{i}', leaf(f'g{i}'))
+        if not game:
+            shown(f'g{i}', f'gear_{i}', leaf(f'g{i}'))
+            continue
+        # the lit digit sits on an anim null at its own centre, so the gear tick scales it about that centre
+        x0, y0, x1, y1 = geo.rect(f'gear_{i}')
+        c = at((x0 + x1) / 2, (y0 + y1) / 2)
+        gn = B.null(f'zh_gear{i}_anim', c, anim=True)
+        B.kids(halo, B.kids(gn, sprite_quad(f'{pfx}g{i}', f'gear_{i}', 22, c)))
+        vis.append((f'v_g{i}', f'{pfx}g{i}', leaf(f'g{i}'), False, False))
+
+        def pop(tau):
+            k = 1.0 + GEAR_POP * max(0.0, 1.0 - tau / GEAR_POP_S)
+            return (k, k, 1.0)
+        node = played(f'zh_gear{i}_anim', f'gear{i}', scale=anim_track((1.0, 1.0, 1.0), pop))
+        ani['decisions'].append(dict(type='MVCD', name=f'an_xg{i}', db=leaf(f'xg{i}'), events=[['1', _start(node)]]))
+    if game:
+        ani['decisions'].append(dict(type='MVCD', name='an_xgr', db=leaf('xgr'),
+                                      events=[['1', [_go(f'x_gear{i}', 1.0) for i in range(9)]]]))
 
     # 3. recharge / deploy capsules: one static window per fill level, one of them shown at a time. 2025 cars: the
     # DLL's 120 kW leaves rk / dk (docs/halo-car-classes.md 7), the same windows
@@ -565,6 +746,45 @@ def _halo(B, geo, halo, pv=None, cls=None):
         if game:
             xas += [('x_batt_win', 'zh_batt_win_anim', NATIVE['battery']), ('x_batt_ctr', 'zh_batt_ctr_anim', NATIVE['battery'])]
 
+    # the Overtake / Boost streak (2026: both pills; 2025: the OVERTAKE mode pill; F2 has no pills): per wing a
+    # texture mask (the band's top edge) over a gradient quad that runs outward on translation keys. At rest, at the
+    # start and at the end the quad is where the mask is clear or outside its rect, so nothing shows. Under the
+    # pills' group, so the G-force meter's centre has none; shown while the gate xan is on.
+    if game and energy:
+        gl = group('glow', leaf('xan'), default=False, parent=ers, hidden=True)
+        nodes = []
+        for side, sgn in (('l', -1), ('r', 1)):
+            x0, y0, x1, y1 = geo.rect('glow_' + side)
+            mc = at((x0 + x1) / 2, (y0 + y1) / 2)
+            m = B.mask(f'{pfx}glow_{side}_mask', mc, K * (x1 - x0), K * (y1 - y0), B.tex['glow_' + side])
+            far = (x1 if sgn > 0 else -x0) + GLOW_LEN + 1.0      # the head's end: the streak is past the mask
+            start = geo.glow_x0
+
+            def centre(tau, sgn=sgn, far=far, start=start, mc=mc):
+                head = _lerp(start, far, ease3(tau / GLOW_S))
+                p = at(sgn * (head - GLOW_LEN / 2), 0.0)
+                return (p[0] - mc[0], 0.0, 0.0)
+            null = f'zh_glow_{side}_anim'
+            an = B.null(null, centre(ANIM_PLAY), anim=True)
+            B.kids(gl, B.kids(m, B.kids(an, B.quad(f'{pfx}glow_{side}_fill', 'comet_' + side, (0.0, 0.0, 0.0),
+                                                   K * GLOW_LEN, K * (y1 - y0 + 2.0), 21))))
+            nodes.append(played(null, 'glow_' + side, pos=anim_track(centre(ANIM_PLAY), centre)))
+        ani['decisions'].append(dict(type='MVCD', name='an_xbo', db=leaf('xbo'), events=[['1', _start(*nodes)]]))
+        # no rest pulse for the streak: its start, end and rest poses show nothing, and on the 2026 dial the game's own
+        # Overtake value (an_om) starts the same nulls, which a rest timed by the DLL could cut
+        if cl is None:
+            # Overtake is the game's own value (the DLL does not read it), so its repeat runs here: an_om starts the
+            # streak and the timer an_omt; when the timer runs out, an_omq asks the value again: still on = the streak
+            # and the timer again; off = nothing more. an_om's 'no' and halo_ctl's untrigger stop the timer. A timer
+            # as the HUD's own (enabled / visible False; reset with a duration; time_out_expired). If it never fires,
+            # there is the one streak.
+            again = _start(*nodes) + [['an_omt', 'reset', {'duration': float(GLOW_REPEAT)}]]
+            ani['decisions'].append(dict(type='SVCD', name='an_om', db=NATIVE['overtake_on'], value=['bool', True],
+                                          events=[['yes', again], ['no', [['an_omt', 'stop', None]]]]))
+            ani['decisions'].append(dict(type='TIME', name='an_omt', events=[['time_out_expired', [['an_omq', 'query', None]]]]))
+            ani['decisions'].append(dict(type='SVCD', name='an_omq', db=NATIVE['overtake_on'], value=['bool', True],
+                                          hook=False, events=[['yes', again]]))
+
     # 6. rpm: static texture masks (the bar's shape) over a solid quad that sweeps round the arc's centre.
     # The preview turns the sweep to the preview's revs once, without a clip.
     C, phi0, rkeys, sigma, reach = geo.rpm()
@@ -586,6 +806,18 @@ def _halo(B, geo, halo, pv=None, cls=None):
             xas.append(('x_' + aname[3:], aname, NATIVE['revs']))
     if game:
         colours.append(('halo_c_rpm', pfx + 'rpm_fill'))
+        # the white RPM line, a third copy of the bar's mask and sweep (the same clip, bound to the game's revs
+        # like the other two), in a group shown while the DLL's leaf xrl is on (revs near the limiter)
+        fl = group('rpm_fl', leaf('xrl'), default=False, hidden=True)
+        x0, y0, x1, y1 = geo.rect('rpm_team')
+        mc = at((x0 + x1) / 2, (y0 + y1) / 2)
+        m = B.mask(pfx + 'rpm_fl_mask', mc, K * (x1 - x0), K * (y1 - y0), B.tex['rpm_team'])
+        cs = at(*C)
+        fa = B.null('zh_rpm_flash_anim', (cs[0] - mc[0], cs[1] - mc[1], 0.0), anim=True)
+        frame = B.null(pfx + 'rpm_flash_frame', (0.0, 0.0, 0.0), rot_deg=phi0)
+        B.kids(frame, B.quad(pfx + 'rpm_fl_fill', 'solid_flash', (0.0, -sigma * reach / 2, 0.0), 2 * reach, reach, 24))
+        B.kids(fl, B.kids(m, B.kids(fa, frame)))
+        xas.append(('x_rpm_flash', 'zh_rpm_flash_anim', NATIVE['revs']))
 
     # 7. text: a rotated, scaled null carries each eText (stock texts are never scaled themselves)
     def text_at(key, cap_pt, angle_canvas, cap_hud, style, halign, box_hud, wrapping, parent=None):
@@ -628,9 +860,43 @@ def _halo(B, geo, halo, pv=None, cls=None):
 
     me = group('me', leaf('nm'), default=True)
     name_line('me', n.get('drvV', 0.0), 0.0, n['drvFs'], NATIVE['own_pos'], NATIVE['own_name'], me)
+    rin = rout = None
+    if game:
+        # the rival line's roll: two movers turned to the line's angle, each with a counter null that undoes its
+        # rest transform (so what it holds keeps its place). zh_riv_in_anim holds the 24 slots and scales across the
+        # line about the band's bottom edge (the new line unfolds from below); zh_riv_out_anim holds a copy of each
+        # slot (gvNN, shown by the DLL for the roll) and scales about the band's top edge; at rest it is folded.
+        ue = num_end + n['rivShift']
+        anchor, ang = geo.lane_chord(ue - num_box, ue + gap + name_box, -n['laneGap'], ue)
+        nx, ny = -math.sin(math.radians(ang)), math.cos(math.radians(ang))   # the line's normal (canvas), toward the driver's line
+        th = math.radians(ang)                                                # the counter null's turn (scene, ccw)
+
+        def mover(null, short, pivot, rest_y, fn):
+            p = at(*pivot)
+            M = B.null(null, p, rot_deg=-ang, scale=(1.0, rest_y, 1.0), anim=True)
+            # counter: turn back by +ang, then move by -p in the mover's frame
+            cx, cy = -p[0], -p[1]
+            cpos = (cx * math.cos(th) - cy * math.sin(th), cx * math.sin(th) + cy * math.cos(th), 0.0)
+            Cn = B.null(f'{pfx}{short}_c', cpos, rot_deg=ang)
+            B.kids(halo, B.kids(M, Cn))
+            played(null, short, scale=anim_track((1.0, rest_y, 1.0), lambda t: (1.0, fn(t), 1.0)))
+            return Cn
+
+        half = RIVAL_BAND / 2
+        rin = mover('zh_riv_in_anim', 'riv_in', (anchor[0] + nx * half, anchor[1] + ny * half), 1.0,
+                    lambda t: max(RIVAL_FOLD, ease3(t / RIVAL_S)))
+        rout = mover('zh_riv_out_anim', 'riv_out', (anchor[0] - nx * half, anchor[1] - ny * half), RIVAL_FOLD,
+                     lambda t: max(RIVAL_FOLD, 1.0 - ease3(t / RIVAL_S)))
+        ani['decisions'].append(dict(type='MVCD', name='an_xrv', db=leaf('xrv'), events=[['1', _start('x_riv_in', 'x_riv_out')]]))
+        ani['decisions'].append(dict(type='MVCD', name='an_xrr', db=leaf('xrr'),
+                                      events=[['1', [_go('x_riv_in', 1.0), _go('x_riv_out', 1.0)]]]))
     for i in range(RIVAL_SLOTS):
-        slot = group(f'rv{i:02d}', leaf(f'rv{i:02d}'))
+        slot = group(f'rv{i:02d}', leaf(f'rv{i:02d}'), parent=rin)
         name_line(f'rv{i:02d}', -n['laneGap'], n['rivShift'], n['rivFs'],
+                  NATIVE['car_pos'].format(i=i), NATIVE['car_name'].format(i=i), slot)
+    for i in range(RIVAL_SLOTS if game else 0):
+        slot = group(f'gv{i:02d}', leaf(f'gv{i:02d}'), parent=rout)
+        name_line(f'gv{i:02d}', -n['laneGap'], n['rivShift'], n['rivFs'],
                   NATIVE['car_pos'].format(i=i), NATIVE['car_name'].format(i=i), slot)
     tn = G['turn']['num']
     label(('t_tnum', pfx + 'tnum', leaf('tnum'), leaf('turn'), False, False),
@@ -663,18 +929,18 @@ def _halo(B, geo, halo, pv=None, cls=None):
                 shown(f'gu{r}{d}', f'g_u{r}_{d}', leaf(f'gu{d}'), parent=sub, layer=26)
                 shown(f'gt{r}{d}', f'g_t{r}_{d}', leaf(f'gt{d}'), parent=sub, layer=26)
             shown('gdot' + r, 'g_dot' + ('_r' if r else ''), parent=sub, layer=26)
-    return vis, texts, xas, colours, rkeys, batt_keys, pv_texts, shows, decisions
+    return vis, texts, xas, colours, rkeys, batt_keys, pv_texts, shows, decisions, ani
 
 
-def _box_and_ids(B, geo, stock_ids):
+def _box_and_ids(B, geo, stock_ids, cls=None):
     """8. customisation box = the halo's footprint; 9. element ids (stock ids must not move)."""
     root = B.root
-    x0, y0, x1, y1 = geo.rect('base')
+    (tlx, tly), (brx, bry) = geo.box(cls)
     # the box points: children of the scene root (dial_om_xm, dial_complete) or of ui_visibility_hook (the F2 dial)
     tl, br = _find(root, 'tl_customisation'), _find(root, 'br_customisation')
     assert tl is not None and br is not None
-    tl.set('position', _vec((K * x0, geo.halo_y + K * -y0, -0.0)))
-    br.set('position', _vec((K * x1, BR_Y, -0.0)))
+    tl.set('position', _vec((tlx, tly, -0.0)))
+    br.set('position', _vec((brx, bry, -0.0)))
     ids = []
     for kid in root['children'].items:
         I.recompute_ids(kid, I._val(kid.get('name')), ids)
@@ -701,19 +967,43 @@ def build_scene(scene_bytes, mods_bytes, bar_bytes, geo, embs, tex):
             p = kid['position'].value
             kid.set('position', _vec((p[0], p[1] - 60.0, p[2])))
             kid.set('scale', _vec((1e-3, 1e-3, 1e-3)))
-    halo = B.null('halo', (0.0, geo.halo_y, 0.0))
-    bc['children'].items.append(halo)
-    vis, texts, xas, colours, rkeys, batt_keys, *_ = _halo(B, geo, halo)
+    halo = geo.place(B, bc, 'halo')
+    vis, texts, xas, colours, rkeys, batt_keys, _pv, _shows, _dec, anim = _halo(B, geo, halo)
+    geo.fit_clip(anim)
     _box_and_ids(B, geo, stock_ids)
 
-    info = dict(vis=vis, texts=texts, xas=xas, colours=colours, rpm_keys=rkeys, batt_keys=batt_keys,
-                rpm_static={a: None for a in ('zh_rpm_anim', 'zh_rpm_core_anim')}, n_new=len(B.names))
-    # static positions of the anim nodes (their clips keep translation fixed)
+    info = dict(vis=vis, texts=texts, xas=xas, colours=colours, rpm_keys=rkeys, batt_keys=batt_keys, anim=anim,
+                anims=sorted(a for a in B.names if a.startswith('zh_')),
+                rpm_static={a: None for a in RPM_NODES}, n_new=len(B.names))
+    _anim_static(B, info)
+    return B.idf.to_bytes(), info
+
+
+RPM_NODES = ('zh_rpm_anim', 'zh_rpm_core_anim', 'zh_rpm_flash_anim')
+
+
+def _anim_static(B, info):
+    """Read back the built scene: the rpm sweeps' static positions (their clips keep translation fixed) and every
+    played null's static transform, which must equal its clip's rest pose (so a null no signal ever reaches, and a
+    null put at rest, look the same)."""
+    seen = {}
     for e, _ in I.Idf(B.idf.to_bytes()).scenes[0].root.walk():
         nm = I._val(e.obj.get('name'))
-        if nm in ('zh_rpm_anim', 'zh_rpm_core_anim'):
+        if nm in info['rpm_static']:
+            assert info['rpm_static'][nm] is None, ('two', nm)
             info['rpm_static'][nm] = tuple(e.obj['position'].value[:3])
-    return B.idf.to_bytes(), info
+        if nm in info['anim']['clips']:
+            assert nm not in seen, ('two', nm)
+            seen[nm] = (tuple(e.obj['position'].value[:3]), tuple(e.obj['rotation'].value[:4]), tuple(e.obj['scale'].value[:3]))
+    assert set(seen) == set(info['anim']['clips']), sorted(set(info['anim']['clips']) ^ set(seen))
+    for nm, (pos, rot, scale) in seen.items():
+        c = info['anim']['clips'][nm]
+        c['static'] = dict(pos=pos, rot=rot, scale=scale)
+        for key, have in (('pos', pos), ('rot', rot), ('scale', scale)):
+            if c[key] is None:
+                continue
+            for k in (c[key][0], c[key][-1]):
+                assert max(abs(x - y) for x, y in zip(k, have)) < 2e-6, ('rest key differs from the scene', nm, key, k, have)
 
 
 def build_preview(scene_bytes, mods_bytes, bar_bytes, geo, embs, tex):
@@ -724,8 +1014,7 @@ def build_preview(scene_bytes, mods_bytes, bar_bytes, geo, embs, tex):
     bc = _find(B.root, 'boundless_customisation')
     stock_ids = {e.path: e.element_id for e, _ in B.idf.scenes[0].root.walk()}
     assert {I._val(k.get('name')) for k in bc['children'].items} >= set(STOCK_KIDS)
-    pv = B.null(PREVIEW_ROOT, (0.0, geo.halo_y, 0.0))
-    bc['children'].items.append(pv)
+    pv = geo.place(B, bc, PREVIEW_ROOT, live=False)
     pv_texts = _halo(B, geo, pv, PREVIEW)[6]
     _box_and_ids(B, geo, stock_ids)
     return B.idf.to_bytes(), {'texts': pv_texts, 'n_new': len(B.names)}
@@ -744,24 +1033,20 @@ def build_class_scene(scene_bytes, mods_bytes, bar_bytes, text_bytes, geo, embs,
     bc = _find(B.root, 'boundless_customisation')
     stock_ids = {e.path: e.element_id for e, _ in B.idf.scenes[0].root.walk()}
     assert {I._val(k.get('name')) for k in bc['children'].items} >= set(STOCK_KIDS)
-    root = B.null(cl['root'], (0.0, geo.halo_y, 0.0), hidden=True)
-    bc['children'].items.append(root)
-    vis, texts, xas, colours, rkeys, batt_keys, _, shows, decisions = _halo(B, geo, root, cls=cls)
-    _box_and_ids(B, geo, stock_ids)
-    anims = [a for a in ANIM_NODES if a in B.names]
+    root = geo.place(B, bc, cl['root'], cls=cls, hidden=True)
+    vis, texts, xas, colours, rkeys, batt_keys, _, shows, decisions, anim = _halo(B, geo, root, cls=cls)
+    geo.fit_clip(anim, cls)
+    _box_and_ids(B, geo, stock_ids, cls)
+    anims = sorted(a for a in B.names if a.startswith('zh_'))
     # the class's switch (setting all_cars = leaf cls, default on): the halo's root shows while it is on; the F2
     # dial's four stock parts while it is off (hud_f1_dial's are in halo_pv_ctl: add_preview_control bound)
     ctl = [('v_halo', cl['root'], leaf('cls'), False, True)]
     if cls == 'f2':
         ctl += [('v_' + nm, nm, leaf('cls'), True, False) for nm in STOCK_KIDS]
     info = dict(cls=cls, root=cl['root'], ctl=ctl, vis=vis, texts=texts, xas=xas, colours=colours, shows=shows,
-                decisions=decisions, rpm_keys=rkeys, batt_keys=batt_keys, anims=anims,
-                rpm_static={a: None for a in ('zh_rpm_anim', 'zh_rpm_core_anim')}, n_new=len(B.names))
-    for e, _ in I.Idf(B.idf.to_bytes()).scenes[0].root.walk():
-        nm = I._val(e.obj.get('name'))
-        if nm in info['rpm_static']:
-            assert info['rpm_static'][nm] is None, ('two', nm)
-            info['rpm_static'][nm] = tuple(e.obj['position'].value[:3])
+                decisions=decisions, rpm_keys=rkeys, batt_keys=batt_keys, anims=anims, anim=anim,
+                rpm_static={a: None for a in RPM_NODES}, n_new=len(B.names))
+    _anim_static(B, info)
     return B.idf.to_bytes(), info
 
 
@@ -830,10 +1115,10 @@ def _clip(tmpl_bytes, node, name_index, chans, strtab=STRTAB):
     return p.to_bytes(), bytes(syst)
 
 
-def build_clips(tmpl_clip_bytes, strtab_bytes, info, strtab=STRTAB, anims=ANIM_NODES):
+def build_clips(tmpl_clip_bytes, strtab_bytes, info, strtab=STRTAB, anims=None):
     """The anim nulls' clips and the scene's string table with their names appended (anims: the nulls this scene
-    has; the F2 halo has no battery, so only the rpm sweeps)."""
-    anims = list(anims)
+    has, default info['anims']; the F2 halo has no battery, so no battery clips)."""
+    anims = list(info['anims'] if anims is None else anims)
     st = Pkg(strtab_bytes)
     strings = st.root['strings']
     have = [v.value for v in strings.items]
@@ -854,7 +1139,7 @@ def build_clips(tmpl_clip_bytes, strtab_bytes, info, strtab=STRTAB, anims=ANIM_N
             (5, 3, 0x80, [0.0, ANIM_T], keys),
             (2, 1, 0x84, [0.0], [ident]),
             (5, 2, 0x80, [0.0], [one])], strtab)
-    for nm in ('zh_rpm_anim', 'zh_rpm_core_anim'):
+    for nm in RPM_NODES:
         pos = info['rpm_static'][nm]
         times = [f * ANIM_T for f, _ in info['rpm_keys']]
         quats = [tuple(quat_z(deg(a))) for _, a in info['rpm_keys']]
@@ -862,7 +1147,21 @@ def build_clips(tmpl_clip_bytes, strtab_bytes, info, strtab=STRTAB, anims=ANIM_N
             (5, 3, 0x80, [0.0], [pos]),
             (2, 1, 0x84, times, quats),
             (5, 2, 0x80, [0.0], [one])], strtab)
-    assert set(clips) == set(anims), (sorted(clips), anims)
+    # the played nulls (info['anim']['clips']): each track's keys on anim_times(), or one key (the scene's static
+    # value) where the motion leaves it alone
+    times = [t * ANIM_T for t in anim_times()]
+    assert times == sorted(times) and len(set(times)) == len(times)
+    for nm, c in info['anim']['clips'].items():
+        st_ = c['static']
+        chans = []
+        for key, interp, typ, flags in (('pos', 5, 3, 0x80), ('rot', 2, 1, 0x84), ('scale', 5, 2, 0x80)):
+            if c[key] is None:
+                chans.append((interp, typ, flags, [0.0], [tuple(st_[key])]))
+            else:
+                assert len(c[key]) == len(times), (nm, key)
+                chans.append((interp, typ, flags, times, [tuple(k) for k in c[key]]))
+        clips[nm] = _clip(tmpl_clip_bytes, nm, index[nm], chans, strtab)
+    assert set(clips) == set(anims), (sorted(set(clips) ^ set(anims)))
     return st.to_bytes(), clips
 
 
@@ -966,20 +1265,98 @@ def _node_at(root, path):
 
 def build_template(ui_bytes, info, parent=TEMPLATE_PARENT, fallback=None):
     """The 2026 halo's group 'halo_ctl' under its dial's [F1HD]: the race HUD's (TEMPLATE_PARENT) or, with a
-    spectator parent, the spectator HUD's f1_26_dial (types checked in that dial's scope, fallback: _race_tags)."""
+    spectator parent, the spectator HUD's f1_26_dial (types checked in that dial's scope, fallback: _race_tags).
+    The animations' players and decision nodes too; halo_ctl gets trigger / untrigger, hooked to the [F1HD]'s
+    show / hide after the stock signals (the class dials' hook)."""
     p = Pkg(ui_bytes)
     target = _node_at(p.root, parent)
+    assert _type(target) == 'F1HD', (parent, _type(target))
     assert not any(N.name(c) == 'halo_ctl' for c in N.children(target)), 'template already has the halo'
+    base = parent + '.halo_ctl'
 
     kids = _binding_nodes(info)
+    bound = list(kids)
+    anodes, acmds = _anim_nodes(info, base, p.root, parent)
+    kids += anodes
     grp = U.node('halo_ctl', 'UIGP', [], kids=kids, behav=U.GROUP_BEHAVIOURS)
+    grp.items[N.COMMANDS].items.extend([U.command('trigger', acmds[0]), U.command('untrigger', acmds[1])])
     if parent == TEMPLATE_PARENT:
-        check_binding_types(p.root, kids)
+        check_binding_types(p.root, bound)
     else:
-        check_binding_types(p.root, kids, parent, fallback)
+        check_binding_types(p.root, bound, parent, fallback)
     N.fix_ids(grp, parent)
     target.items[N.CHILDREN].items.append(grp)
+    assert len({N.name(k) for k in kids}) == len(kids), 'template node name reused'
+    _hook(target, parent, base)
     return p.to_bytes(), len(kids)
+
+
+def _hook(target, parent, base):
+    """The [F1HD]'s show command triggers halo_ctl and its hide untriggers it, after the stock signals."""
+    for cmd, pin in (('show', 'trigger'), ('hide', 'untrigger')):
+        c = [x for x in target.items[N.COMMANDS].items if isinstance(x, Obj) and x['commandName'].value == cmd]
+        assert len(c) == 1, (parent, cmd, len(c))
+        c[0]['signals'].items.append(U.sig(base, pin, cmd))
+
+
+XA_BEHAV = ('NBFC', 'NBXA', 'NBEL', 'NBDC', 'NBMG', 'NBVM', 'NBAN', 'NBAC', 'NBOS', 'NBMO')   # the stock UIXA's
+
+
+def _anim_nodes(info, base, stock_root, parent):
+    """the animations' template nodes under halo_ctl `base`:
+    - a UIXA per played null (no props: signals drive it, as the tower's);
+    - an MVCD per DLL pulse leaf with one event '1' (a pulse going false sends nothing), and the SVCDs on the game's
+      own values (an_om: om_active, an_xm: is_xm_active; value bool True, as the same dial's stock SVCDs on them:
+      checked here);
+    -> (nodes, (trigger signals, untrigger signals)): trigger registers and queries each decision node, then puts
+       every played null at rest (fraction 1); untrigger unregisters."""
+    a = info['anim']
+    nodes = [U.node(nm, 'UIXA', [], layout=[el], behav=XA_BEHAV) for nm, el in a['uixa']]
+    names = {nm for nm, _el in a['uixa']} | {d['name'] for d in a['decisions']}
+    stock = [n for path, n in _walk_paths(_node_at(stock_root, parent)) if 'halo_ctl' not in path.split('.')]
+    trig, untrig, nsig = [], [], 0
+    for d in a['decisions']:
+        if d['type'] == 'TIME':
+            # a timer, as the stock HUD's (24 of its 31: enabled and visible False): stopped when the dial hides
+            evs = [U.event(ev, [U.sig(f'{base}.{tgt}', pin, ev, attrs) for tgt, pin, attrs in sigs]) for ev, sigs in d['events']]
+            assert all(tgt in names for _ev, sigs in d['events'] for tgt, _p, _a in sigs), d['name']
+            nsig += sum(len(sigs) for _ev, sigs in d['events'])
+            nodes.append(U.node(d['name'], 'TIME', [('enabled', U.prop('bool', False)), ('visible', U.prop('bool', False))], events=evs))
+            untrig.append(U.sig(f'{base}.{d["name"]}', 'stop', 'untrigger'))
+            continue
+        if d['type'] == 'MVCD':
+            key = d['db'][len(VM):]
+            assert d['db'].startswith(VM) and key not in DLL_TEXT_LEAVES and [e for e, _ in d['events']] == ['1'], d['name']
+        else:
+            same = [n for n in stock if _type(n) == 'SVCD' and n.items[N.PROPS].get('dbEntry') is not None
+                    and n.items[N.PROPS]['dbEntry']['value'].value == d['db']]
+            # the value's tag: a stock SVCD of this dial compares the same value with this tag (om_active), or the
+            # dial's stock nodes bind it with this tag and no other (is_xm_active: the race dial's own SVCD reads
+            # is_xm_available, the spectator dial's is_xm_active)
+            by_svcd = bool(same) and all(n.items[N.PROPS]['value']['value'].type == d['value'][0] for n in same)
+            by_bind = _tags(_node_at(stock_root, parent)).get(d['db']) == {d['value'][0]}
+            assert by_svcd or by_bind, ('no stock node reads', d['db'], 'as', d['value'][0], 'under', parent)
+        evs = []
+        for ev, sigs in d['events']:
+            assert all(tgt in names for tgt, _pin, _at in sigs), d['name']
+            evs.append(U.event(ev, [U.sig(f'{base}.{tgt}', pin, ev, attrs) for tgt, pin, attrs in sigs]))
+            nsig += len(sigs)
+        props = [('dbEntry', U.prop('stri', d['db']))]
+        if d['type'] == 'SVCD':
+            props.insert(0, ('value', U.prop(*d['value'])))
+        nodes.append(U.node(d['name'], d['type'], props, events=evs))
+        if d.get('hook', True):       # hook False: a node only another node queries (never registered)
+            path = f'{base}.{d["name"]}'
+            trig += [U.sig(path, 'register', 'trigger'), U.sig(path, 'query', 'trigger')]
+            untrig.append(U.sig(path, 'unregister', 'untrigger'))
+    trig += [U.sig(f'{base}.{nm}', 'goToFraction', 'trigger', {'value': 1.0}) for nm in a['rest']]
+    if a.get('fit') and parent.startswith('hud_spectator_2.'):
+        # layout 'cam': a spectator dial draws the halo at today's place and size (the race dials have no
+        # such node: there the scene's own, fitted pose stands)
+        nodes.append(U.node(a['fit'][0], 'UIXA', [], layout=[a['fit'][1]], behav=XA_BEHAV))
+        trig.append(U.sig(f'{base}.{a["fit"][0]}', 'goToFraction', 'trigger', {'value': FIT_TV}))
+    a['counts'] = dict(uixa=len(a['uixa']), decisions=len(a['decisions']), signals=nsig, rest=len(a['rest']))
+    return nodes, (trig, untrig)
 
 
 def _binding_nodes(info):
@@ -1119,12 +1496,17 @@ def build_class_template(ui_bytes, info, parent=None, fallback=None):
         kids.append(U.node(nm, 'UIGP', [('visible', U.prop('bool', bool(default)))], layout=[el], behav=U.GROUP_BEHAVIOURS))
     dnodes, cmds = _decision_nodes(info, base)
     kids += dnodes
+    bound = list(kids)
+    anodes, acmds = _anim_nodes(info, base, p.root, parent)    # after the class's own nodes
+    kids += anodes
+    for c, more in zip(cmds, acmds):
+        c['signals'].items.extend(more)
     grp = U.node('halo_ctl', 'UIGP', [], kids=kids, behav=U.GROUP_BEHAVIOURS)
     grp.items[N.COMMANDS].items.extend(cmds)
     if scope:
-        check_binding_types(p.root, kids, scope, fallback)
+        check_binding_types(p.root, bound, scope, fallback)
     else:
-        check_binding_types(p.root, kids)
+        check_binding_types(p.root, bound)
     check_decisions(p.root, parent, info['decisions'])
     N.fix_ids(grp, parent)
     target.items[N.CHILDREN].items.append(grp)
@@ -1133,10 +1515,7 @@ def build_class_template(ui_bytes, info, parent=None, fallback=None):
     for d in info['decisions']:
         for _ev, sigs in d['events']:
             assert all(tgt in names for tgt, _pin in sigs), d['name']
-    for cmd, pin in (('show', 'trigger'), ('hide', 'untrigger')):
-        c = [x for x in target.items[N.COMMANDS].items if isinstance(x, Obj) and x['commandName'].value == cmd]
-        assert len(c) == 1, (parent, cmd, len(c))
-        c[0]['signals'].items.append(U.sig(base, pin, cmd))
+    _hook(target, parent, base)
     return p.to_bytes(), len(kids)
 
 
@@ -1205,6 +1584,17 @@ def _relative(x, parent):
     return y
 
 
+def _without_fit(grp):
+    """A spectator group without the 'cam' layout's fit node and the trigger signal to it"""
+    kids = grp.items[N.CHILDREN].items
+    kids[:] = [k for k in kids if N.name(k) != FIT_NODE]
+    for c in grp.items[N.COMMANDS].items:
+        if isinstance(c, Obj):
+            sg = c['signals'].items
+            sg[:] = [x for x in sg if x['to_object_name'].value.rsplit('.', 1)[-1] != FIT_NODE]
+    return grp
+
+
 def check_spectator_same(race_built, spec_built):
     """Fail the build unless each spectator dial carries the same groups as its race dial, node for node and binding
     for binding (paths aside), and its show / hide signal them as the race dial's do."""
@@ -1216,7 +1606,7 @@ def check_spectator_same(race_built, spec_built):
         sg = {N.name(c): c for c in N.children(st) if N.name(c) in OUR_GROUPS}
         assert sorted(rg) == sorted(sg), (cls, sorted(rg), sorted(sg))
         for nm in rg:
-            assert _canon(_relative(rg[nm], rp)) == _canon(_relative(sg[nm], sp)), (cls, nm, 'differs from the race HUD')
+            assert _canon(_relative(rg[nm], rp)) == _canon(_without_fit(_relative(sg[nm], sp))), (cls, nm, 'differs from the race HUD')
 
         def ours(t, path):
             return sorted((c['commandName'].value, x['to_object_name'].value[len(path):], x['to_pin_name'].value)
@@ -1284,6 +1674,29 @@ def check_stock_kept(before_bytes, after_bytes, label):
     a, b = Pkg(before_bytes).root, _strip_ours(Pkg(after_bytes).root)
     assert _canon(a) == _canon(b), f'{label}: a stock node changed'
     print(f'stock kept: {label} ({len(_walk_paths(a))} stock nodes unchanged outside our groups)')
+
+
+VM_NAME = re.compile(rb'#?(view_model_data|ui_menu_data)\.([A-Za-z0-9_]+)')
+
+
+def check_vm_hashes(blobs):
+    """Fail the build if a hud_halo_ view-model name shares its djb2 hash with another name under the same parent in
+    the built templates: the game keys view-model nodes by that hash, so the two would be one node (seen in game on
+    the tower's rows). -> the number of names checked"""
+    names = {}
+    for blob in blobs:
+        for m in VM_NAME.finditer(blob):
+            names.setdefault(m.group(1).decode(), set()).add(m.group(2).decode())
+    bad, total = [], 0
+    for parent, nms in names.items():
+        total += len(nms)
+        by = {}
+        for nm in nms:
+            by.setdefault(N.djb2(nm), []).append(nm)
+        bad += [f'{parent}: {" = ".join(sorted(g))}' for g in by.values() if len(g) > 1 and any(x.startswith('hud_halo_') for x in g)]
+    if bad:
+        raise SystemExit('view-model names that share a djb2 hash (one node in game):\n  ' + '\n  '.join(bad[:12]))
+    return total
 
 
 def _canon(x):

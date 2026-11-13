@@ -6,7 +6,7 @@
 // The wings are drawn the way the broadcast maps them onto the curved halo: text runs along
 // the band, but letter verticals lean toward the centre ("lean", degrees from screen-vertical,
 // positive = top to the right) instead of staying perpendicular to the baseline.
-const HALO = (() => {
+const HALO_MAKE = (LAYOUT) => {
   const D = Math.PI / 180;
   const FONT = (typeof window !== 'undefined' && window.HALO_FONT) || 'HaloSaira';
   const CAP = 0.688; // Saira cap height / em
@@ -163,6 +163,28 @@ const HALO = (() => {
     drsOpen: '#22BC34', drsOpenLine: '#8CF09A', drsOpenText: '#04240B', drsOpenGlow: 'rgba(60,220,90,0.32)',
   };
 
+  // ---------- layout variant 'cam' ("Default camera"): a symmetric halo for the game's centred T-cam. Both wings
+  // have one shape, their top edge follows the car's own halo bar as the default camera shows it (
+  // measured on one capture; the numbers below come from that measure and from today's set by one rule: every part
+  // keeps its x and its share of the band's height and turns with the band). The layout draws 4/3 as large in game.
+  // Today's set ('tv', the broadcast's off-centre camera) is every number above and the two band tables below.
+  const CAM = {
+    bandTop: [[-218.0, 54.55], [-190, 33.15], [-168, 20.43], [-146, 10.2], [-122, 1.2], [-98, -6.01], [-77.0, -11.0], [-58, -17], [-36, -24], [0, -27], [36, -24], [58, -17], [77.0, -11.0], [98, -6.01], [122, 1.2], [146, 10.2], [168, 20.43], [190, 33.15], [218.0, 54.55]],
+    bandBot: [[218.0, 98.13], [188, 77.27], [166, 66.05], [144, 57.12], [122, 49.0], [100, 39.66], [80, 31.0], [64, 25.0], [36, 28], [0, 29], [-36, 28], [-64, 25.0], [-80, 31.0], [-100, 39.66], [-122, 49.0], [-144, 57.12], [-166, 66.05], [-188, 77.27], [-218.0, 98.13]],
+    brakeLbl: { x: -52.544, y: 31.095, rot: -14.501, lean: -2.49 },
+    throttleLbl: { x: 52.544, y: 31.095, rot: 14.501, lean: 2.49 },
+    turn: { arrow: { x: -87.419, y: 10.516, s: 1, rot: -49.669, lean: -25.238 }, lbl: { x: -82.816, y: 22.476, fs: 4.497, rot: -17.188, lean: -17.188, tr: 0.3 }, num: { x: -83.922, y: 29.682, fs: 7.934, rot: -17.188, lean: -17.188, tr: 0.3 } },
+    names: { x: -106.759, y: 28.697, rot: -17.18, bend: 0.001167, lean: -11, leanRel: 0, drvV: 0.73, laneGap: 13.784, drvFs: 8.508, rivFs: 6.963, rivShift: 3.703, tr: 1.26, lineA: -7.495, lineB: 7.858, lineW: 0.8, railA0: 3.01, railB0: -3.02, cardEnd: -84.44, numEnd: -67.686, numGap: 6.86, numBox: 14.0, nameBox: 62.0 },
+    aero: { x1: 89.654, y1: 4.916, x2: 88.54, y2: 9.322, rot: 14.189, lean: 10.889, fs: 4.371, tr: 0.587, barX: 85.19, barY: 20.457, barDx: 3.85, barDy: -3.76, barLen: 12.24, barAng: 13.342, slHx: 2.78, slHy: 0.76, slLen: 8.84, slAng: -54.258, slTh: 1.25, barTh: 1.1 },
+    // gear digits: larger and bolder than the 'tv' set's 6.916 / 700 and 6.557 / 780
+    gears: { p0: [107.887, 19.155], p1: [149.139, 30.672], p2: [188.881, 52.287], fs: 7.7, fsOn: 7.7, w: 800, wOn: 880, lean: 5.762, track: 7.107, trackW: 1.9, mx: 97.901, my: 26.182, mr: 0, gx: 154.802, gy: 24.141, grot: 20.456, rx: 142.439, ry: 45.689, rrot: 21.994, lfs: 4.251, llean: 8.085, r0t: -0.046, r15t: 1.108, rEndOff: 4.642, rEndFs: 5.023 },
+    band: { dx: 0.0, dy: 5.0 },
+    wings: { L: { xi: -71.41, tilt: 6.85, top: 3.4, bot: 4.25, r: 3.4, xFar: -218.0 }, R: { xi: 71.41, tilt: 6.85, top: 3.4, bot: 4.25, r: 3.4, xFar: 218.0 } },
+    drs: { y: 12.527, rot: 14.189, lean: 10.889 },
+  };
+  const cam = LAYOUT === 'cam';
+  if (cam) { for (const k of Object.keys(G)) if (CAM[k] && !Array.isArray(CAM[k]) && k !== 'drs') G[k] = CAM[k]; Object.assign(GV.drs, CAM.drs); }
+
   // ---------- text
   let WEIGHT = 700;
   function font(g, px) { g.font = `${WEIGHT} ${px}px ${FONT}`; g.fontStretch = 'expanded'; }
@@ -262,8 +284,8 @@ const HALO = (() => {
   };
 
   // ---------- backdrop band and wing frames
-  const BAND_TOP = [[-215, 65], [-182, 44], [-160, 29], [-138, 15], [-117, 4], [-97, -4], [-77, -10.5], [-58, -17], [-36, -24], [0, -27], [36, -24], [58, -17], [76, -11.5], [98, -6], [122, 3], [146, 15], [168, 29], [190, 45], [220, 68]];
-  const BAND_BOT = [[220, 112], [188, 90], [166, 75], [144, 62], [122, 51], [100, 40], [80, 30], [64, 24.5], [36, 28], [0, 29], [-36, 28], [-64, 25.5], [-80, 32], [-100, 42], [-122, 54], [-144, 66], [-166, 79], [-186, 91], [-215, 108]];
+  const BAND_TOP = cam ? CAM.bandTop : [[-215, 65], [-182, 44], [-160, 29], [-138, 15], [-117, 4], [-97, -4], [-77, -10.5], [-58, -17], [-36, -24], [0, -27], [36, -24], [58, -17], [76, -11.5], [98, -6], [122, 3], [146, 15], [168, 29], [190, 45], [220, 68]];
+  const BAND_BOT = cam ? CAM.bandBot : [[220, 112], [188, 90], [166, 75], [144, 62], [122, 51], [100, 40], [80, 30], [64, 24.5], [36, 28], [0, 29], [-36, 28], [-64, 25.5], [-80, 32], [-100, 42], [-122, 54], [-144, 66], [-166, 79], [-186, 91], [-215, 108]];
   const bandTopPts = smoothPts(BAND_TOP, false), bandBotPts = smoothPts(BAND_BOT, false);
   const yAt = (pts, x) => { for (let i = 1; i < pts.length; i++) { const a = pts[i - 1], b = pts[i]; if ((x - a[0]) * (x - b[0]) <= 0 && a[0] !== b[0]) return lerp(a[1], b[1], (x - a[0]) / (b[0] - a[0])); } return pts[x < 0 ? 0 : pts.length - 1][1]; };
 
@@ -623,16 +645,18 @@ const HALO = (() => {
     text(g, 'ACTIVE', a.x1, a.y1, a.fs, col, { tr: a.tr, rot: a.rot, lean: a.lean, w: 760 });
     text(g, 'AERO', a.x2, a.y2, a.fs, col, { tr: a.tr, rot: a.rot, lean: a.lean, w: 760 });
   }
-  function drawAeroBars(g, straight, col) {
+  // one bar of the active-aero symbol: s = +1 / -1 picks the bar; straight: its "=" pose, else its "//" pose. The +1
+  // slash and the +1 flat bar are the same bar in the two modes (the game turns one into the other)
+  function drawAeroBar(g, straight, s, col) {
     const a = G.aero;
     g.fillStyle = col;
     const bar = (cx, cy, len, ang, th = a.barTh) => { g.save(); g.translate(cx, cy); g.rotate(ang * D); rr(g, -len / 2, -th / 2, len, th, th / 2); g.fill(); g.restore(); };
-    if (straight) { // "=" (sheared with the wing): two flat bars, the lower one set back toward the centre
-      bar(a.barX + a.barDx / 2, a.barY + a.barDy / 2, a.barLen, a.barAng);
-      bar(a.barX - a.barDx / 2, a.barY - a.barDy / 2, a.barLen, a.barAng);
-    } else {         // "//": two steep slashes
-      bar(a.barX - a.slHx, a.barY - a.slHy, a.slLen, a.slAng, a.slTh); bar(a.barX + a.slHx, a.barY + a.slHy, a.slLen, a.slAng, a.slTh);
-    }
+    if (straight) bar(a.barX + s * a.barDx / 2, a.barY + s * a.barDy / 2, a.barLen, a.barAng);   // "=" (sheared with the wing): two flat bars, the lower one set back toward the centre
+    else bar(a.barX + s * a.slHx, a.barY + s * a.slHy, a.slLen, a.slAng, a.slTh);                 // "//": two steep slashes
+  }
+  function drawAeroBars(g, straight, col) {
+    if (straight) { drawAeroBar(g, true, 1, col); drawAeroBar(g, true, -1, col); }
+    else { drawAeroBar(g, false, -1, col); drawAeroBar(g, false, 1, col); }
   }
   function drawAero(g, st) {
     // white in both modes on the broadcast (docs/research 3.9); aeroTint only reproduces the fan-made screenshot
@@ -676,7 +700,7 @@ const HALO = (() => {
   function drawGearMarker(g) { const q = G.gears; if (!(q.mr > 0)) return; g.beginPath(); g.arc(q.mx, q.my, q.mr, 0, 7); g.strokeStyle = 'rgba(140,160,172,0.75)'; g.lineWidth = 0.4; g.stroke(); }
   function drawGearDigit(g, i, on) {
     const q = G.gears, t = i / 8, [x, y] = gearPt(t, 0), [tx, ty] = bezTan(q.p0, q.p1, q.p2, t);
-    text(g, 'N12345678'[i], x, y, on ? q.fsOn : q.fs, on ? P.white : P.gearDim, { rot: Math.atan2(ty, tx) / D, lean: q.lean, w: on ? 780 : 700 });
+    text(g, 'N12345678'[i], x, y, on ? q.fsOn : q.fs, on ? P.white : P.gearDim, { rot: Math.atan2(ty, tx) / D, lean: q.lean, w: on ? (q.wOn ?? 780) : (q.w ?? 700) });
   }
   function drawGearLabels(g) {
     const q = G.gears;
@@ -737,10 +761,12 @@ const HALO = (() => {
     capsXin, capsXout, stripeXin, stripeXout, stripeLine, slatPts, slatColour, stripeY, stripePitch, drawSlat, centreFrame, drawCentreLabels, drawBand, drawWing, drawStripes, drawCapsule, drawCollar, drawDisc, drawBoost, drawOT, speedText,
     mphText, battInterior, battFill, battOutline, battBolt, drawGStatic, gText, gSlots, gChar, gOn, gView, gFormat, drawGRings, drawGLabel,
     drawGArc, drawGSeg, drawGBlock, gSector, turnArrow, drawTurnArrow, drawTurnNumber,
-    drawTurnLabel, drawRails, drawAeroLabel, drawAeroBars, gearPt, drawGearTrack, drawRpmBar, drawGearMarker,
+    drawTurnLabel, drawRails, drawAeroLabel, drawAeroBars, drawAeroBar, bandTopPts, gearPt, drawGearTrack, drawRpmBar, drawGearMarker,
     drawGearDigit, drawGearLabels, RPM_T0, RPM_T1,
     // car classes (the 2025 and F2 variants)
     CLASSES, carClass, drsLook, ersModeIndex, ERS_MODES, drawDRS, drawErsCaption, drawErsMode,
   };
-  return { draw, G, P, GV, PV, CLASSES, internals, parts: { drawCentre, drawNames, drawTurn, drawAero, drawDRS, drawGears, drawDial, drawBand, drawWing } };
-})();
+  return { LAYOUT: cam ? 'cam' : 'tv', draw, G, P, GV, PV, CLASSES, internals, parts: { drawCentre, drawNames, drawTurn, drawAero, drawDRS, drawGears, drawDial, drawBand, drawWing } };
+};
+// window.HALO_LAYOUT = 'cam' before this file loads picks the symmetric layout; HALO_MAKE('cam') makes a second one
+const HALO = HALO_MAKE(typeof window !== 'undefined' && window.HALO_LAYOUT);

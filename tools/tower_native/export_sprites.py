@@ -5,7 +5,7 @@ usage: python -I export_sprites.py <out dir> [--chrome PATH] [--r PX_PER_HUD] [-
 
 One sprite per Chrome run, each run with its own new profile folder: since 2026-11-09 about 08:00, headless Chrome on
 this PC hangs on pages that draw more than a couple of canvases, and a hung run can leave child processes holding its
-profile folder. Nothing here reads or writes game files.
+profile folder (same workaround as tools/gmeter/render.py). Nothing here reads or writes game files.
 """
 import argparse
 import html

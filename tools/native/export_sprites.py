@@ -2,7 +2,9 @@
 the sprite set the builder reads: <out>/sprites.npz, sprites.json and png/*.png (the same files textures.py writes).
 
 usage: python -I export_sprites.py <out dir> [--keep OLD_DIR] [--only a,b] [--chrome PATH] [--r PX_PER_HUD]
-                                   [--profile DIR]
+                                   [--profile DIR] [--layout cam]
+
+--layout cam: the symmetric "Default camera" layout of halo.js; without it today's set.
 
 --keep OLD_DIR: take every sprite that OLD_DIR's set already has from there, unchanged, and render only the others.
 That keeps a released look byte-identical when sprites are added (browser updates can move pixels).
@@ -67,13 +69,15 @@ def main():
     ap.add_argument('--chrome', default=default_browser(), help='Chromium-based browser (default: Edge, else Chrome)')
     ap.add_argument('--r', type=int, default=3)
     ap.add_argument('--profile', default=os.path.join(tempfile.gettempdir(), 'halo-export-chrome'))
+    ap.add_argument('--layout', choices=('tv', 'cam'), default='tv')
     a = ap.parse_args()
+    lay = '&layout=cam' if a.layout == 'cam' else ''
     if not os.path.exists(os.path.join(os.path.dirname(PAGE), 'saira.ttf')):
         raise SystemExit('tools/saira.ttf is missing: export_native.html needs the Saira font there (see README)')
     os.makedirs(a.out, exist_ok=True)
     os.makedirs(a.profile, exist_ok=True)
 
-    head = chrome_dump(a.chrome, a.profile, f'?r={a.r}&only=')
+    head = chrome_dump(a.chrome, a.profile, f'?r={a.r}&only=' + lay)
     names = head['names']
     kept, meta_old = {}, None
     if a.keep:
@@ -92,7 +96,7 @@ def main():
     digits = None
     for i, n in enumerate(want, 1):
         t0 = time.time()
-        d = chrome_dump(a.chrome, a.profile, f'?r={a.r}&only={n}')
+        d = chrome_dump(a.chrome, a.profile, f'?r={a.r}&only={n}' + lay)
         (s,) = d['sprites']
         raw = np.frombuffer(__import__('base64').b64decode(s['rgba']), np.uint8).reshape(s['h'], s['w'], 4)
         images[n] = textures.bleed(raw.copy())

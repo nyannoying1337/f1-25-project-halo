@@ -451,7 +451,7 @@ void Model::update(const Snapshot &s, const Frame &f, const Settings &cfg, doubl
         // out: retired, DSQ, NC (4..7). Timed sessions: a car with a best lap keeps its row and time (an in-game
         // test: every car still out on track went to 7 when Q1 ended, the player through to Q2 included)
         r.out = (st == 4 || st == 5 || st == 6 || st == 7) && !(timed && c.lap_ok[vid]);
-        r.fl = v.fl_vid == vid;
+        r.fl = !cfg.clip && v.fl_vid == vid; // the mark is the final state's, not a clip's
         r.me = cfg.highlight && vid == f.player;
         r.ko = v.ko_safe > 0 && !r.out && r.pos > v.ko_safe;
         const int a = cfg.arrows ? arrow(vid, now) : 0;

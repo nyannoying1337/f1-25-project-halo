@@ -27,7 +27,17 @@
       g.setTransform(R, 0, 0, R, -x0 * R, -y0 * R); g.lineJoin = 'round';
       if (opts.centre) g.scale(CS, CS);
       draw(g);
-      const d = g.getImageData(0, 0, W, H).data;
+      // opts.frame: crop to what this other drawing covers instead (a part of a sprite on that sprite's own crop, so
+      // both have the same texels at the same places: the active-aero bars)
+      let d = g.getImageData(0, 0, W, H).data;
+      if (opts.frame) {
+        const c2 = document.createElement('canvas'); c2.width = W; c2.height = H;
+        const g2 = c2.getContext('2d', { willReadFrequently: true });
+        g2.setTransform(R, 0, 0, R, -x0 * R, -y0 * R); g2.lineJoin = 'round';
+        if (opts.centre) g2.scale(CS, CS);
+        opts.frame(g2);
+        d = g2.getImageData(0, 0, W, H).data;
+      }
       let mx0 = W, my0 = H, mx1 = -1, my1 = -1;
       for (let y = 0; y < H; y++) { const row = y * W * 4; for (let x = 0; x < W; x++) if (d[row + x * 4 + 3]) { if (x < mx0) mx0 = x; if (x > mx1) mx1 = x; if (y < my0) my0 = y; my1 = y; } }
       if (mx1 < 0) throw new Error('empty sprite ' + name);
@@ -81,6 +91,15 @@
     const rpmPath = (g, a, b) => {
       g.beginPath();
       for (let i = 0; i <= 200; i++) { const p = I.gearPt(I.lerp(a, b, i / 200), G.gears.track); i ? g.lineTo(...p) : g.moveTo(...p); }
+    };
+    // the band's top edge from |x| = GLOW_X0 to the wing's far end: a soft 3-unit line with a bright core
+    const GLOW_X0 = 40;
+    const bandGlow = (g, side) => {
+      g.save(); g.beginPath(); if (side > 0) g.rect(GLOW_X0, -120, 400, 320); else g.rect(-GLOW_X0 - 400, -120, 400, 320); g.clip();
+      g.translate(G.band.dx, G.band.dy); I.poly(g, I.bandTopPts, false); g.lineCap = 'butt';
+      g.strokeStyle = 'rgba(255,255,255,0.5)'; g.lineWidth = 3.0; g.stroke();
+      g.strokeStyle = '#FFFFFF'; g.lineWidth = 0.9; g.stroke();
+      g.restore();
     };
     const gq = G.gears, GM = G.gm, V = GM.val;
     // neighbouring segments overlap by 1 degree each way so no seam shows where two lit ones meet; the lit arc's
@@ -158,13 +177,23 @@
       ['ers_medium', g => I.drawErsMode(g, 1), { centre: true }],
       ['ers_hotlap', g => I.drawErsMode(g, 2), { centre: true }],
       ['base_f2', g => { outer(g); g.save(); g.scale(CS, CS); centreBaseF2(g); g.restore(); }],
+      // animations: each active-aero bar on its own, in its "=" pose (e) and its "//" pose (s),
+      // from the same drawing and on the same crop as aero_eq_w / aero_sl (the two bars together are that sprite); and the band's top edge on each wing as an alpha shape, the
+      // mask the Overtake / Boost streak runs under (white: the streak's quad gives the colour)
+      ['aero_e0', g => I.drawAeroBar(g, true, 1, P.aeroBar), { frame: g => I.drawAeroBars(g, true, P.aeroBar) }],
+      ['aero_e1', g => I.drawAeroBar(g, true, -1, P.aeroBar), { frame: g => I.drawAeroBars(g, true, P.aeroBar) }],
+      ['aero_s0', g => I.drawAeroBar(g, false, 1, P.aeroBar), { frame: g => I.drawAeroBars(g, false, P.aeroBar) }],
+      ['aero_s1', g => I.drawAeroBar(g, false, -1, P.aeroBar), { frame: g => I.drawAeroBars(g, false, P.aeroBar) }],
+      ['glow_l', g => bandGlow(g, -1)],
+      ['glow_r', g => bandGlow(g, 1)],
     ];
 
     const names = specs.map(s => s[0]);
     const unknown = (only || []).filter(n => !names.includes(n));
     if (unknown.length) throw new Error('unknown sprite ' + unknown.join(','));
     const sprites = specs.filter(s => !only || only.includes(s[0])).map(([n, d, o]) => sprite(n, d, o));
-    out.textContent = JSON.stringify({ G, P, R, CAP: I.CAP, RPM_T0: I.RPM_T0, RPM_T1: I.RPM_T1, names, digits: digitInfo, sprites });
+    // LAYOUT is in the header for the 'cam' layout only: the 'tv' header stays as it was
+    out.textContent = JSON.stringify({ G, P, R, CAP: I.CAP, RPM_T0: I.RPM_T0, RPM_T1: I.RPM_T1, GLOW_X0, ...(HALO.LAYOUT === 'cam' ? { LAYOUT: 'cam' } : {}), names, digits: digitInfo, sprites });
     document.title = 'done';
   } catch (e) { out.textContent = 'ERROR ' + e.stack; document.title = 'error'; }
 })();

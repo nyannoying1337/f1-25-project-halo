@@ -2488,6 +2488,26 @@ SCENE_ROOT = 'Scene Root'
 # replay_interface > replay_button_set>camera_view>Scene Root, visible <- #replay_data.controls.show_camera_button
 REPLAY_MASKS = (('tt_mask_table', REPLAY_TABLE), ('tt_mask_header', REPLAY_HEADER))
 REPLAY_STING_NODE = 'tt_sting'
+# is_video_sting_enabled is not "a sting plays": the game writes it once when the screen opens, true in every
+# replay mode but instant replay and broadcast (highlights reel, snapshot, terminal damage; F1_25.exe 0x141bd31c5).
+# There tt_sting hides the tower for the whole screen, so the stock board must stay. The masks are plain groups now
+# (shown), and two decision nodes send them the groups' built-in hide / show (stock: 15 + 14 uses in this template):
+#   tt_rp_on    SVCD hud_tt_on = true:  yes -> query tt_rp_mode;  no -> show both masks
+#   tt_rp_mode  SVCD is_video_sting_enabled = true (only queried):  yes -> show both masks;  no -> hide both masks
+# So the stock board is hidden exactly while the tower shows (on AND NOT the flag), and is the unmodded board
+# otherwise. SVCD yes / no to a node's show / hide is the halo's ERS-mode route (halo_native.py), seen in game.
+REPLAY_DEC_ON, REPLAY_DEC_MODE = 'tt_rp_on', 'tt_rp_mode'
+# a highlights clip (the DLL's hud_tt_rclip, and its inverse hud_tt_nrclip so that both directions arrive as a
+# 'yes'). The replay screen's whole visibility is decided by decision nodes now:
+#   tower shown  = hud_tt_on AND (clip OR (show_drivers_list AND NOT is_video_sting_enabled))
+#   game's board = shown exactly when the tower is not (its two masks)
+# The second term is the instant replay as before (list on, flag off). tt_sting keeps its name and element
+# (tt_host>Scene Root) but binds nothing: the chain shows and hides it. v_tt_root is a constant true as in the HUD.
+#   triggers (registered, each 'yes' and 'no' -> query tt_rp_c_on): tt_rp_on (hud_tt_on), tt_rp_hl, tt_rp_nhl
+#   chain (only queried): tt_rp_c_on -> tt_rp_c_hl -> tt_rp_c_list -> tt_rp_mode
+REPLAY_HL, REPLAY_NHL = VM + 'rclip', VM + 'nrclip'   # not 'hl': that is the highlight-my-row leaf
+REPLAY_CHAIN = ('tt_rp_c_on', 'tt_rp_c_hl', 'tt_rp_c_list', REPLAY_DEC_MODE)
+REPLAY_TRIGGERS = (REPLAY_DEC_ON, 'tt_rp_hl', 'tt_rp_nhl')
 
 
 def build_replay_scene(scene_bytes):
@@ -2631,7 +2651,8 @@ def trial_off():
 
 def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
     """replays_and_highlights.ui plus the tower: under the screen root one group tt_ctl with
-      tt_mask_table, tt_mask_header  driver_table>Scene Root, session_timer>Scene Root: visible <- NOT hud_tt_on
+      tt_mask_table, tt_mask_header  driver_table>Scene Root, session_timer>Scene Root: no binding (shown); hidden
+                                     and shown by tt_rp_on / tt_rp_mode (see REPLAY_DEC_ON)
       tt_host_n                      tt_host: visible <- hud_tt_on; the HUD's tower nodes (tower_nodes), with v_tt_root
                                      bound to show_drivers_list
       tt_sting                       tt_host>Scene Root: visible <- NOT is_video_sting_enabled
@@ -2663,14 +2684,11 @@ def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
     for el in (REPLAY_TABLE, REPLAY_HEADER):
         assert any(ch == (el,) for _p, ch in stock_vis), ('the stock board is no longer switched on its reference', el)
 
-    nodes = tower_nodes(T, hud, badge_tag, root_visible=U.prop('bool', True, REPLAY_SHOW),
-                        series=(REPLAY_SERIES, series_tag)) + [trial_off()]
+    nodes = tower_nodes(T, hud, badge_tag, series=(REPLAY_SERIES, series_tag)) + [trial_off()]   # root constant
     host = U.node('tt_host_n', 'UIGP', [('visible', H._bool_prop(False, leaf('on')))], kids=nodes, layout=[HOST],
                   behav=U.GROUP_BEHAVIOURS)
-    masks = [U.node(nm, 'UIGP', [('visible', H._bool_prop(True, leaf('on'), True))], layout=[el, SCENE_ROOT],
-                    behav=U.GROUP_BEHAVIOURS) for nm, el in REPLAY_MASKS]
-    sting = U.node(REPLAY_STING_NODE, 'UIGP', [('visible', H._bool_prop(True, REPLAY_STING, True))],
-                   layout=[HOST, SCENE_ROOT], behav=U.GROUP_BEHAVIOURS)
+    masks = [U.node(nm, 'UIGP', [], layout=[el, SCENE_ROOT], behav=U.GROUP_BEHAVIOURS) for nm, el in REPLAY_MASKS]
+    sting = U.node(REPLAY_STING_NODE, 'UIGP', [], layout=[HOST, SCENE_ROOT], behav=U.GROUP_BEHAVIOURS)   # no binding
     clock = clock_formatter(hud_p.root)
     # the animations (anim_nodes), started by the screen's open and stopped by its close through tt_ctl's
     # trigger and untrigger (the HUD's: Track Position's enable and disable)
@@ -2678,8 +2696,37 @@ def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
     anim_host, anim_dec, anim_trig, anim_untrig, anim_info = anim_nodes(T, base)
     check_anim_leaves(anim_info['leaves'], contract)
     host.items[N.CHILDREN].items.extend(anim_host)
-    ctl = U.node(CTL, 'UIGP', [], kids=masks + [host, sting, clock] + anim_dec, behav=U.GROUP_BEHAVIOURS)
-    ctl.items[N.COMMANDS].items.extend([U.command('trigger', anim_trig), U.command('untrigger', anim_untrig)])
+    # the screen's visibility decisions (REPLAY_HL). Registered and queried when the screen opens, after the
+    # animations' signals; unregistered when it closes
+    # the two clip leaves are written by the DLL outside the tower's leaf table: their names must not be in it
+    assert REPLAY_HL not in contract and REPLAY_NHL not in contract, 'a clip leaf name is a tower leaf'
+    for db_ in (leaf('on'), REPLAY_STING, REPLAY_SHOW):      # a decision compares a bool with a bool value
+        assert replay_binding_type(db_, contract, hud, replay) == {'bool'}, (db_, replay_binding_type(db_, contract, hud, replay))
+
+    def sg(to, pin, ev):
+        return U.sig(f'{base}.{to}', pin, ev)
+
+    def tower(ev):
+        return [sg(REPLAY_STING_NODE, 'show', ev)] + [sg(nm, 'hide', ev) for nm, _el in REPLAY_MASKS]
+
+    def game(ev):
+        return [sg(REPLAY_STING_NODE, 'hide', ev)] + [sg(nm, 'show', ev) for nm, _el in REPLAY_MASKS]
+
+    def svcd(name, db, yes, no):
+        return U.node(name, 'SVCD', [('value', U.prop('bool', True)), ('dbEntry', U.prop('stri', db))],
+                      events=[U.event('yes', yes), U.event('no', no)])
+    c_on, c_hl, c_list, c_mode = REPLAY_CHAIN
+    rp_nodes = [svcd(c_on, leaf('on'), [sg(c_hl, 'query', 'yes')], game('no')),
+                svcd(c_hl, REPLAY_HL, tower('yes'), [sg(c_list, 'query', 'no')]),
+                svcd(c_list, REPLAY_SHOW, [sg(c_mode, 'query', 'yes')], game('no')),
+                svcd(c_mode, REPLAY_STING, game('yes'), tower('no'))]
+    for nm, db in zip(REPLAY_TRIGGERS, (leaf('on'), REPLAY_HL, REPLAY_NHL)):
+        rp_nodes.append(svcd(nm, db, [sg(c_on, 'query', 'yes')], [sg(c_on, 'query', 'no')]))
+    rp_trig = [U.sig(f'{base}.{nm}', 'register', 'trigger') for nm in REPLAY_TRIGGERS] + [sg(c_on, 'query', 'trigger')]
+    rp_untrig = [U.sig(f'{base}.{nm}', 'unregister', 'untrigger') for nm in REPLAY_TRIGGERS]
+    ctl = U.node(CTL, 'UIGP', [], kids=masks + [host, sting, clock] + anim_dec + rp_nodes, behav=U.GROUP_BEHAVIOURS)
+    ctl.items[N.COMMANDS].items.extend([U.command('trigger', anim_trig + rp_trig),
+                                        U.command('untrigger', anim_untrig + rp_untrig)])
 
     # every binding's type must be the type of the value it reads: a mismatch crashes the game when the screen opens
     bad, out = [], []
@@ -2704,7 +2751,55 @@ def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
     got = H._node_at(q.root, f'{REPLAY_ROOT}.{CTL}')
     kids = [N.name(c) for c in N.children(got)]
     assert kids == ([nm for nm, _ in REPLAY_MASKS] + ['tt_host_n', REPLAY_STING_NODE, 'tt_clock_fmt'] +
-                    [N.name(d) for d in anim_dec]), kids
+                    [N.name(d) for d in anim_dec] + list(REPLAY_CHAIN) + list(REPLAY_TRIGGERS)), kids
+    # the masks and the tower's gate bind nothing; every decision signal hits a node of tt_ctl by path
+    # and id; the truth table over (tower on, clip, the game's list, the sting flag)
+    by = {N.name(c): c for c in N.children(got)}
+    for nm in [m for m, _el in REPLAY_MASKS] + [REPLAY_STING_NODE]:
+        assert not H._bindings(by[nm], []) and by[nm].items[N.PROPS].get('visible') is None, ('still bound', nm)
+    dbs = {REPLAY_CHAIN[0]: leaf('on'), REPLAY_CHAIN[1]: REPLAY_HL, REPLAY_CHAIN[2]: REPLAY_SHOW, REPLAY_CHAIN[3]: REPLAY_STING,
+           REPLAY_TRIGGERS[0]: leaf('on'), REPLAY_TRIGGERS[1]: REPLAY_HL, REPLAY_TRIGGERS[2]: REPLAY_NHL}
+    for d, db in dbs.items():
+        pr = by[d].items[N.PROPS]
+        assert U._type(by[d]) == 'SVCD' and pr['value']['value'].type == 'bool' and pr['value']['value'].value is True
+        assert pr['dbEntry']['value'].value == db, (d, db)
+
+    def fires(node, ev):
+        e = [x for x in node.items[N.EVENTS].items if isinstance(x, Obj) and x['eventName'].value == ev]
+        assert len(e) == 1, (N.name(node), ev)
+        out_ = []
+        for sg_ in e[0]['signals'].items:
+            to = sg_['to_object_name'].value
+            assert to.startswith(base + '.') and to[len(base) + 1:] in by, ('signal leaves tt_ctl', to)
+            assert sg_['to_object'].value == by[to[len(base) + 1:]].items[N.PROPS]['id'].value, ('target id', to)
+            out_.append((to[len(base) + 1:], sg_['to_pin_name'].value))
+        return out_
+
+    def screen(val, start):
+        """the gate's and the masks' state after node `start` fires for the leaf values `val`"""
+        st = {REPLAY_STING_NODE: 'shown', 'masks': 'shown'}
+        todo, steps = fires(by[start], 'yes' if val[dbs[start]] else 'no'), 0
+        while todo:
+            to, pin = todo.pop(0)
+            steps += 1
+            assert steps < 40, 'the decisions loop'
+            if pin == 'query':
+                todo += fires(by[to], 'yes' if val[dbs[to]] else 'no')
+            else:
+                assert pin in ('show', 'hide'), (to, pin)
+                st[to if to == REPLAY_STING_NODE else 'masks'] = 'shown' if pin == 'show' else 'hidden'
+        return st
+    table = {}
+    for on in (True, False):
+        for hl in (True, False):
+            for lst in (True, False):
+                for flag in (True, False):
+                    val = {leaf('on'): on, REPLAY_HL: hl, REPLAY_NHL: not hl, REPLAY_SHOW: lst, REPLAY_STING: flag}
+                    want = on and (hl or (lst and not flag))
+                    for start in (REPLAY_CHAIN[0],) + REPLAY_TRIGGERS:       # the open's query and every trigger
+                        st = screen(val, start)
+                        assert st == {REPLAY_STING_NODE: 'shown' if want else 'hidden', 'masks': 'hidden' if want else 'shown'}, (val, start, st)
+                    table[f'on={int(on)} clip={int(hl)} list={int(lst)} sting={int(flag)}'] = 'tower' if want else "game's board"
     assert H._canon(H._strip_ours(q.root, (CTL,))) == H._canon(Pkg(ui_bytes).root), 'replay: a node outside tt_ctl changed'
     hooks = [(cmd, s['to_object_name'].value, s['to_pin_name'].value, s['to_object'].value)
              for cmd in ('open', 'close') for x in H._node_at(q.root, REPLAY_ROOT).items[N.COMMANDS].items
@@ -2727,6 +2822,7 @@ def build_replay_template(ui_bytes, hud_stock_ui_bytes, T, contract):
     info = {'nodes': count, 'tower_nodes': len(nodes), 'bindings': len(out),
             'dll_leaves': len({db for db, _ in out if db.startswith(VM)}),
             'stock_visible_nodes': len(stock_vis), 'replay_vm': sorted(db for db, _ in out if db.startswith(REPLAY_VM)),
+            'visibility_table': table,
             'anim': {k: v for k, v in anim_info.items() if k != 'leaves'}}
     return data, info, out
 

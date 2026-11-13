@@ -3,6 +3,7 @@
 // decoding, validation, lifecycle handling (freed and recycled objects, AI takeover, session changes) and
 // that nothing faults. Build and run: tests/run_tests.sh
 #include "../src/game_state_f1_25.hpp"
+#include "../src/halo_anim.hpp"
 #include "../src/halo_corners.hpp"
 #include "../src/hud_model.hpp"
 #include "../src/leaves.hpp"
@@ -1421,6 +1422,10 @@ static void test_leaf_names(const char *out_path)
         return;
     for (const std::string &x : p)
         std::fprintf(f, "%s\n", x.c_str());
+    // the animations' leaves (halo_anim.hpp; written only while the Animations option is on)
+    HaloAnim an;
+    for (int i = 0; i < HaloAnim::count(); ++i)
+        std::fprintf(f, "%s\n", an.path(i));
     std::fclose(f);
 }
 

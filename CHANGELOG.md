@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.2.2 beta
+
+The halo now moves: a streak runs along the wings on Boost and Overtake, the gear number ticks on a shift, and the name of the car ahead rolls over when it changes. The halo also gets a second layout that sits on the car's own halo in the default camera. Two more HUD parts join in the broadcast look, the pit lane timer and the lap time card, and every part of Project Halo can now be switched off on its own.
+
+### New
+
+- **Halo animations:** a bright streak runs out along both wings when Boost or Overtake comes on, and repeats once a second while it stays on. The gear number ticks on every shift, and the RPM line turns white near the limiter. When the car ahead changes, its name rolls out and the new one rolls in. The active aero bars turn between their two shapes instead of jumping. The Animations setting switches all of it off.
+- **Halo layout: Default camera.** A new, even-sided halo, larger, placed on the car's own halo as the default T-cam shows it, with bigger gear numbers. It is the new default. The setting Halo layout gives the earlier halo back as TV offset (the broadcast's off-centre camera angle, at the bottom of the screen).
+- **Pit lane timer:** in place of the game's pit timer, in the broadcast look: position, team logo, surname, team colour line, IN PIT with the pit lane time, and the stop time under it. After the pit exit the time shows with three decimals.
+- **Lap time card:** in place of the game's lap time pills: position, team logo, surname and tyre, the running lap time, and S1, S2 and S3. The bar of the current sector grows in white and takes the game's sector colour when the sector is done. The lap time turns green for 3 seconds on a personal best and purple on the session's fastest lap. Best and Previous sit below.
+- **Pit speed message:** the whole message is red while you are over the pit limit and green once you are under it, with PIT LIMIT above the limit.
+- **A switch for every part:** Halo dial, Timing tower, Race Control banner, Pit lane timer, Lap time card and Pit speed colour each have their own setting. Off gives that part of the game's own HUD back. The Timing tower switches at once; the others apply after a restart. Pit speed colour needs the Race Control banner on.
+
+### Changed
+
+- The pit lane timer and the lap time card take their team logo and tyre from the same source as the tower, and work with the Timing tower switched off.
+
+### Fixed
+
+- View highlights (after a race): the timing tower now shows in the highlights reel, with each clip's order, team logos, tyres and lap. It shows no gaps there, because the game does not keep them for a replayed moment.
+- Replays: an instant replay no longer risks showing the game's board behind the tower.
+
+### Known issues
+
+- Halo layout Default camera: fitted to a 2026 car in the default T-cam at 16:9. Other cars, other cameras, ultrawide screens and changed camera settings can sit differently: move or resize the halo in HUD customisation, or use TV offset.
+- Halo layout Default camera: a halo you already moved in HUD customisation ends up higher and larger. Place it again once.
+- Halo layout Default camera: the game's tutorial message and the open MFD can touch the halo.
+- The pit window stays the game's own.
+- The running lap time shows three decimals; the game gives the HUD no shorter form.
+- STOP TIME and PIT LIMIT are in English in every language.
+- My Team: your own team's logo stays empty in the tower.
+- Time Trial: long driver names in the tower look squeezed.
+- Full field with more than 22 cars: the tower can run past the bottom of the screen. Make it smaller in HUD customisation, or use Around me or Leaders.
+- With the timing tower on and Track Position switched off in HUD customisation, the game's lap counter stays hidden too. Turn the Timing tower setting off to get it back.
+- Depending on the screen resolution, the scaling might be off.
+
 ## 0.2.1 beta
 
 The validation log now stays inside the game folder. Nothing changes in the halo or the timing tower. Everything from 0.2.0 is in this release.

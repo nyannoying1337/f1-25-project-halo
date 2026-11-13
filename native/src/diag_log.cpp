@@ -1,6 +1,6 @@
 #include "diag_log.hpp"
 
-#include <windows.h>
+#include <swofty/storage.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -14,8 +14,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <swofty/storage.hpp>
 
 namespace halo::diag {
 namespace {
@@ -36,28 +34,11 @@ std::vector<Record> g_fill, g_drain;
 std::vector<TowerRec> g_tfill, g_tdrain;
 std::atomic<bool> g_started{false};
 std::atomic<uint64_t> g_dropped{0}, g_tdropped{0};
-// The two files, as paths inside the addon's own folder (swofty/addons/nick.f1-2026-halo/, the SDK's storage API:
-// nothing is written outside the game and addon folders). g_file and g_tfile say a file is open; the lines of a
-// writer pass collect in g_out and g_tout and go out in one append.
-std::string g_path, g_tpath, g_out, g_tout;
-bool g_file = false, g_tfile = false;
+// Files live in the addon's own storage folder (swofty/storage.hpp): paths are relative to swofty/addons/<id>/.
+std::string g_path, g_tpath;
+std::atomic<bool> g_file{false}, g_tfile{false}; // each file accepts records
+std::string g_out, g_tout;                       // the writer thread's pending lines, one append per drain
 size_t g_bytes = 0, g_tbytes = 0;
-Sink g_sink = nullptr;
-
-bool storage_sink(const char *path, const char *data, size_t n)
-{
-    return swofty::storage::append(path, std::string_view(data, n)) == swofty::storage::Result::ok;
-}
-
-// Send what a pass collected. A failed append closes the file: the storage went away, no point in piling up text.
-void flush(std::string &out, const std::string &path, bool &open)
-{
-    if (out.empty())
-        return;
-    if (open && !g_sink(path.c_str(), out.data(), out.size()))
-        open = false;
-    out.clear();
-}
 
 const char *kHeader =
     "t,frame,compatible,active,generation,cars,session_type,track_len_m,track_name,"
@@ -149,7 +130,6 @@ void write_record(const Record &r)
         return;
     if (g_bytes + size_t(n) > kMaxBytes) {
         g_out += "# size limit reached: logging stopped\n";
-        flush(g_out, g_path, g_file);
         g_file = false;
         return;
     }
@@ -618,12 +598,21 @@ void write_tower(const TowerRec &r)
     o.ch('\n');
     if (g_tbytes + o.n > kMaxBytes) {
         g_tout += "# size limit reached: logging stopped\n";
-        flush(g_tout, g_tpath, g_tfile);
         g_tfile = false;
         return;
     }
     g_tout.append(line, o.n);
     g_tbytes += o.n;
+}
+
+// One append per file per drain (every 0.5 s). A failed append stops that file: nothing is retried or buffered on.
+void flush(const std::string &path, std::string &out, std::atomic<bool> &on)
+{
+    if (out.empty())
+        return;
+    if (swofty::storage::append(path, out) != swofty::storage::Result::ok)
+        on = false;
+    out.clear();
 }
 
 void writer()
@@ -638,23 +627,22 @@ void writer()
         for (const Record &r : g_drain)
             write_record(r);
         g_drain.clear();
-        flush(g_out, g_path, g_file);
+        flush(g_path, g_out, g_file);
         for (const TowerRec &r : g_tdrain)
             write_tower(r);
         g_tdrain.clear();
-        flush(g_tout, g_tpath, g_tfile);
+        flush(g_tpath, g_tout, g_tfile);
     }
 }
 
 } // namespace
 
-bool start(Sink sink)
+bool start()
 {
     bool expected = false;
     if (!g_started.compare_exchange_strong(expected, true))
-        return g_file;
-    g_sink = sink ? sink : storage_sink;
-    if (!sink && !swofty::storage::available())
+        return g_file.load();
+    if (!swofty::storage::available())
         return false;
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -662,19 +650,21 @@ bool start(Sink sink)
     char stamp[32];
     std::strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", &tm);
     g_path = std::string("diag/halo_") + stamp + ".csv";
-    if (!g_sink(g_path.c_str(), kHeader, std::strlen(kHeader)))
+    if (swofty::storage::append(g_path, kHeader) != swofty::storage::Result::ok)
         return false;
-    g_file = true;
     g_bytes = std::strlen(kHeader);
+    g_file = true;
     g_fill.reserve(kBatch);
     g_drain.reserve(kBatch);
+    g_out.reserve(size_t(1) << 20);
     // the timing tower's companion log, same stamp (tools/ingame/analyze_diag.py reads both)
     g_tpath = std::string("diag/tower_") + stamp + ".csv";
-    if (g_sink(g_tpath.c_str(), kTowerHeader, std::strlen(kTowerHeader))) {
-        g_tfile = true;
+    if (swofty::storage::append(g_tpath, kTowerHeader) == swofty::storage::Result::ok) {
         g_tbytes = std::strlen(kTowerHeader);
+        g_tfile = true;
         g_tfill.reserve(kTowerBatch);
         g_tdrain.reserve(kTowerBatch);
+        g_tout.reserve(size_t(1) << 18);
     }
     std::thread(writer).detach();
     return true;
