@@ -60,6 +60,8 @@ Dynamic parts in the built scene:
 
 - One sprite per slat, shown cumulatively.
 - Two sprites per gear digit: the lit one while engaged, the unlit one otherwise.
+- Two more per strip place for the game's suggested gear (green above the current gear, amber below), shown by an
+  MVCD on the game's `desired_gear_display` and two DLL leaves (`docs/suggested-gear.md`, 0.2.3).
 - Static windows for the capsule levels.
 - A sliding window over the battery fill.
 - A rotating quad under a texture mask for the RPM bar.

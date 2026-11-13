@@ -39,6 +39,7 @@ SWOFTY_SETTING(bool, show_names, true);
 SWOFTY_SETTING(bool, show_turns, true);
 SWOFTY_SETTING(bool, g_meter, false);
 SWOFTY_SETTING(bool, all_cars, true);
+SWOFTY_SETTING(bool, suggested_gear, true);
 SWOFTY_SETTING(bool, validation_log, false);
 // one switch per element (elements.hpp). tower_on is live; the others go into the launcher's build (their
 // archives are applied or left out), so they are read once at start and stay what this launch was built with
@@ -94,6 +95,7 @@ struct App {
     bool tower_reads = false;          // the provider is compatible: the reader has this build's keys
     el::Elements elements;             // the build-time switches as read at start (tower: live, A.tset.enabled)
     bool was_sampling = true;          // the game-state sample ran last frame
+    bool was_sgear = false;            // 0.2.3: the suggested-gear marks were armed last frame
     el::ClipLatch clip_latch;          // a highlights clip (a replayed moment after the finish)
     bool clip = false, clip_sent = false;
     double clip_sent_t = -100;
@@ -334,8 +336,16 @@ void frame(double dt, void *)
     A.was_sampling = need.sample;
     // the halo off: its model runs on the empty state (no read) and publishes the blank halo, 2025 / F2 dials stock
     A.model.update(need.halo ? A.state : kNoState, dt,
-                   HudConfig{bool(show_names), bool(show_turns), bool(g_meter), bool(all_cars) && need.halo});
+                   HudConfig{bool(show_names), bool(show_turns), bool(g_meter), bool(all_cars) && need.halo,
+                             bool(suggested_gear) && need.halo});
     int halo_writes = publish(A.leaves, A.model.view(), A.wall);
+    if (A.model.view().sgear != A.was_sgear) {
+        // 0.2.3: the suggested-gear marks' gate. The digit itself is the game's own value (desired_gear_display),
+        // which the template reads; the DLL does not read it
+        A.was_sgear = A.model.view().sgear;
+        swofty::log("[halo-re] suggested gear: marks %s (option %s; the digit comes from the game's own value)",
+                    A.was_sgear ? "armed" : "off", bool(suggested_gear) ? "on" : "off");
+    }
     {
         // the halo's animations, from the view just published and state the provider already validated. The
         // Animations option (read with the tower's settings, 4 times a second) switches them off: no leaf is written

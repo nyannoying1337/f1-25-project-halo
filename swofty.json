@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "nick.f1-2026-halo",
   "name": "Project Halo",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": "nyannoying",
   "icon": "icons/halo.png",
   "description": "The 2026 F1 world feed's onboard halo for 2026, 2025 and F2 cars, an animated broadcast-style timing tower, the Race Control banner and an optional G-force meter, drawn by F1 25's own HUD. Read from the game itself: no UDP telemetry, no companion app.",
@@ -107,6 +107,14 @@
       "default": true,
       "binds": "native",
       "description": "The halo in F1 25's 2025 cars and in F2 cars too, in place of their dials. 2025 cars: DRS, the ERS deploy mode, the battery and RECHARGE / DEPLOY. F2 cars: DRS, no energy parts. Off: their own dials come back. 2026 cars always show the halo."
+    },
+    {
+      "id": "suggested_gear",
+      "type": "toggle",
+      "label": "Suggested gear",
+      "default": true,
+      "binds": "native",
+      "description": "The game's gear suggestion on the halo's gear strip: the suggested gear lights up green (shift up) or amber (shift down) with a small pointer. Only while the game's suggested gear assist is on and the gear differs. Off: no mark."
     },
     {
       "id": "halo_layout",

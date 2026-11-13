@@ -186,6 +186,10 @@
       ['aero_s1', g => I.drawAeroBar(g, false, -1, P.aeroBar), { frame: g => I.drawAeroBars(g, false, P.aeroBar) }],
       ['glow_l', g => bandGlow(g, -1)],
       ['glow_r', g => bandGlow(g, 1)],
+      // suggested gear (0.2.3): per strip place the mark for a suggestion above the current gear (green) and below
+      // it (amber): the digit in the hint colour with its glow, and the pointer triangle
+      ...[0, 1, 2, 3, 4, 5, 6, 7, 8].map(i => ['sg_up_' + i, g => I.drawGearSuggest(g, i, true)]),
+      ...[0, 1, 2, 3, 4, 5, 6, 7, 8].map(i => ['sg_dn_' + i, g => I.drawGearSuggest(g, i, false)]),
     ];
 
     const names = specs.map(s => s[0]);

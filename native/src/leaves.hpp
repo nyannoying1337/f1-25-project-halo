@@ -38,23 +38,28 @@ public:
                 l.sent = false;
         }
         int budget = kWriteBudget;
-        for (Leaf &l : leaves_) {
-            if (budget <= 0)
-                break;
-            const bool same = l.sent && (l.kind == 0 ? l.sent_b == l.want_b : l.sent_t == l.want_t);
-            if (same)
-                continue;
-            const hud::Result r = l.kind == 0 ? hud::set(l.path, l.want_b) : hud::set(l.path, l.want_t);
-            --budget;
-            if (r == hud::Result::ok) {
-                l.sent = true;
-                l.sent_b = l.want_b;
-                l.sent_t = l.want_t;
-            } else if (r != last_error_) {
-                last_error_ = r;
-                swofty::log("[halo] hud set %s: %s", l.path.c_str(), hud::name(r));
+        // 0.2.3: two passes over the same leaves. First the ones whose value differs from the last one sent (a real
+        // change), then the ones that are only due again (the refresh, or never sent). The writes are the same as
+        // before; a change no longer waits behind a refresh, which takes several frames at the budget (the gear's
+        // digit and the suggested-gear leaves must turn in the same frame).
+        for (int pass = 0; pass < 2; ++pass)
+            for (Leaf &l : leaves_) {
+                if (budget <= 0)
+                    break;
+                const bool differs = l.kind == 0 ? l.sent_b != l.want_b : l.sent_t != l.want_t;
+                if (pass == 0 ? !differs : (differs || l.sent))
+                    continue;
+                const hud::Result r = l.kind == 0 ? hud::set(l.path, l.want_b) : hud::set(l.path, l.want_t);
+                --budget;
+                if (r == hud::Result::ok) {
+                    l.sent = true;
+                    l.sent_b = l.want_b;
+                    l.sent_t = l.want_t;
+                } else if (r != last_error_) {
+                    last_error_ = r;
+                    swofty::log("[halo] hud set %s: %s", l.path.c_str(), hud::name(r));
+                }
             }
-        }
         return kWriteBudget - budget;
     }
 
@@ -149,6 +154,22 @@ inline void publish_classes(Leaves &L, const View &v)
     }
 }
 
+// The suggested gear (docs/suggested-gear.md; written after the class leaves, so their order is unchanged). The game
+// itself names the suggested digit (its own desired_gear_display, read by the template); these leaves only say on
+// which side of the current gear each strip place k (0 = N, 1..8) lies: su<k> = above it (the green mark), sd<k> =
+// below it (the amber mark). The current gear's own place has neither, so a suggestion equal to the current gear
+// shows nothing. All false while the setting is off, the gear is not read or the car is not the player's own. A place
+// the gear left a moment ago has neither for kSgearHold seconds (View.sgear_hold, hud_model.cpp).
+inline void publish_sgear(Leaves &L, const View &v)
+{
+    const bool on = v.live && v.sgear && v.gear_ok;
+    for (int k = 0; k < kGearPlaces; ++k) {
+        const bool lit = on && !((v.sgear_hold >> k) & 1u);
+        L.want("su" + std::to_string(k), lit && k > v.gear);
+        L.want("sd" + std::to_string(k), lit && k < v.gear);
+    }
+}
+
 inline int publish(Leaves &L, const View &v, double now)
 {
     const bool live = v.live;
@@ -182,6 +203,7 @@ inline int publish(Leaves &L, const View &v, double now)
         L.want("rv" + two(i), live && v.rival_id == i);
     publish_gmeter(L, v);
     publish_classes(L, v);
+    publish_sgear(L, v);
     return L.flush(now);
 }
 

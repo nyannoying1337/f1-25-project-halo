@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.3 beta
+
+The halo now shows the game's suggested gear. Players who drive with the gear suggestion assist no longer lose the hint when the halo replaces the game's dial.
+
+### New
+
+- **Suggested gear:** with the game's assist Manual with suggested gear on, the gear the game suggests lights up on the halo's gear strip with a small pointer: green when it is higher than your gear, amber when it is lower. In the right gear, or with the assist off, nothing extra shows. Both halo layouts, 2026, 2025 and F2 cars, also with the G-force meter. The new setting Suggested gear (On) switches it off.
+
+### Known issues
+
+- Suggested gear: a mark shows about 0.15 seconds after the game names a gear, and a gear you just left stays dark for 0.3 seconds.
+- Suggested gear: the mark shows and hides at once; it has no animation.
+- Suggested gear: no mark in the spectator view.
+
 ## 0.2.2 beta
 
 The halo now moves: a streak runs along the wings on Boost and Overtake, the gear number ticks on a shift, and the name of the car ahead rolls over when it changes. The halo also gets a second layout that sits on the car's own halo in the default camera. Two more HUD parts join in the broadcast look, the pit lane timer and the lap time card, and every part of Project Halo can now be switched off on its own.

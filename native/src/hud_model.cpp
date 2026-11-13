@@ -50,6 +50,9 @@ void HudModel::update(const gs::GameState &s, double dt, const HudConfig &cfg)
         v = View{};
         e_n_ = 0;
         gmeter_.reset();
+        sg_gear_known_ = false;
+        for (double &t : sg_hold_until_)
+            t = 0;
     }
     v.live = s.compatible && s.session.active && s.vehicle.ok;
     v.race = s.session.race();
@@ -79,6 +82,27 @@ void HudModel::update(const gs::GameState &s, double dt, const HudConfig &cfg)
     // gear: discrete, never eased
     v.gear_ok = s.vehicle.gear_ok && s.vehicle.gear >= -1 && s.vehicle.gear <= 9;
     v.gear = v.gear_ok ? s.vehicle.gear : 0;
+    v.sgear = cfg.suggested_gear && v.gear_ok && !s.spectate.on;
+    // The game names the suggested digit itself and gives the current gear when it has no suggestion. Its value and
+    // this read of the gear do not turn in the same frame, so right after a shift the game can still name the gear
+    // just left, which now lies beside the current one and would light as a suggestion for a frame or a few. Each
+    // place the gear leaves (and each it passes in a shift of several gears) is therefore held dark for kSgearHold.
+    // Per place: a mark on any other place is not touched. A frame without a gear keeps the last one read.
+    if (v.gear_ok) {
+        if (sg_gear_known_ && v.gear != sg_gear_) {
+            const int lo = std::max(std::min(sg_gear_, v.gear), 0);
+            const int hi = std::min(std::max(sg_gear_, v.gear), kGearPlaces - 1);
+            for (int k = lo; k <= hi; ++k)
+                if (k != v.gear)
+                    sg_hold_until_[k] = clock_ + kSgearHold;
+        }
+        sg_gear_known_ = true;
+        sg_gear_ = v.gear;
+    }
+    v.sgear_hold = 0;
+    for (int k = 0; k < kGearPlaces; ++k)
+        if (clock_ < sg_hold_until_[k])
+            v.sgear_hold = uint16_t(v.sgear_hold | (1u << k));
 
     // pedals
     v.pedals_ok = s.input.ok;

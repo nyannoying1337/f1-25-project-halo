@@ -702,6 +702,21 @@ const HALO_MAKE = (LAYOUT) => {
     const q = G.gears, t = i / 8, [x, y] = gearPt(t, 0), [tx, ty] = bezTan(q.p0, q.p1, q.p2, t);
     text(g, 'N12345678'[i], x, y, on ? q.fsOn : q.fs, on ? P.white : P.gearDim, { rot: Math.atan2(ty, tx) / D, lean: q.lean, w: on ? (q.wOn ?? 780) : (q.w ?? 700) });
   }
+  // Suggested gear (0.2.3): the game's gear suggestion on the strip. The suggested digit i in the hint colour at the
+  // lit digit's size and weight with a soft glow, and a small triangle on the side away from the RPM line, its tip
+  // toward the digit. Green when the suggestion is above the current gear (up), amber when below.
+  const SG_UP = '#4BE37A', SG_DOWN = '#FFB42E', SG_GLOW = 10 / 6, SG_OFF = -5.3;
+  function drawGearSuggest(g, i, up) {
+    const q = G.gears, t = i / 8, col = up ? SG_UP : SG_DOWN, [x, y] = gearPt(t, 0), [tx, ty] = bezTan(q.p0, q.p1, q.p2, t), a = Math.atan2(ty, tx);
+    const m = g.getTransform(), k = Math.hypot(m.a, m.b);   // a canvas shadow's blur is in device pixels: SG_GLOW HUD units at any scale
+    g.save(); g.shadowColor = col; g.shadowBlur = SG_GLOW * k;
+    text(g, 'N12345678'[i], x, y, q.fsOn, col, { rot: a / D, lean: q.lean, w: q.wOn ?? 780 });
+    g.restore();
+    const [mx, my] = gearPt(t, SG_OFF);
+    g.save(); g.translate(mx, my); g.rotate(a);
+    g.beginPath(); g.moveTo(-1.4, -1.0); g.lineTo(1.4, -1.0); g.lineTo(0, 1.0); g.closePath(); g.fillStyle = col; g.fill();
+    g.restore();
+  }
   function drawGearLabels(g) {
     const q = G.gears;
     text(g, 'GEARS', q.gx, q.gy, q.lfs, P.gearLbl, { rot: q.grot, lean: q.llean, tr: 0.3 });
@@ -717,6 +732,9 @@ const HALO_MAKE = (LAYOUT) => {
     drawRpmBar(g, st.rpm, st.team || '#27F4D2');
     drawGearMarker(g);
     for (let i = 0; i < 9; i++) drawGearDigit(g, i, String(st.gear) === 'N12345678'[i] || (i === 0 && st.gear === 0));
+    // st.sug: the suggested gear's place on the strip (0 = N, 1..8), when it differs from the current gear
+    const cur = st.gear === 0 ? 0 : 'N12345678'.indexOf(String(st.gear));
+    if (cur >= 0 && st.sug != null && st.sug >= 0 && st.sug <= 8 && st.sug !== cur) drawGearSuggest(g, st.sug, st.sug > cur);
     drawGearLabels(g);
   }
 
@@ -762,7 +780,7 @@ const HALO_MAKE = (LAYOUT) => {
     mphText, battInterior, battFill, battOutline, battBolt, drawGStatic, gText, gSlots, gChar, gOn, gView, gFormat, drawGRings, drawGLabel,
     drawGArc, drawGSeg, drawGBlock, gSector, turnArrow, drawTurnArrow, drawTurnNumber,
     drawTurnLabel, drawRails, drawAeroLabel, drawAeroBars, drawAeroBar, bandTopPts, gearPt, drawGearTrack, drawRpmBar, drawGearMarker,
-    drawGearDigit, drawGearLabels, RPM_T0, RPM_T1,
+    drawGearDigit, drawGearSuggest, drawGearLabels, RPM_T0, RPM_T1,
     // car classes (the 2025 and F2 variants)
     CLASSES, carClass, drsLook, ersModeIndex, ERS_MODES, drawDRS, drawErsCaption, drawErsMode,
   };

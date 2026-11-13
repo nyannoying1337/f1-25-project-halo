@@ -1239,6 +1239,10 @@ static void test_spectate()
         Leaves L;
         publish(L, v, 0.0);
         CHECK(L.wanted("rv00") && !L.wanted("rv01") && L.wanted("spd") && L.wanted("g2") && !L.wanted("gm"));
+        // the suggested gear is the local player's: no mark is armed for a watched car
+        CHECK(!v.sgear);
+        for (int k = 0; k < kGearPlaces; ++k)
+            CHECK(!L.wanted("su" + std::to_string(k)) && !L.wanted("sd" + std::to_string(k)));
     }
 
     // between scans the watched car is re-read every frame: its new speed shows at once
@@ -1404,6 +1408,211 @@ static void test_classes()
     }
 }
 
+// The suggested gear's leaves (0.2.3): the side of the current gear each strip place lies on, and the gate.
+static void test_sgear()
+{
+    auto sides = [](const View &v, int k, bool up, bool down) {
+        Leaves L;
+        publish(L, v, 0.0);
+        return L.wanted("su" + std::to_string(k)) == up && L.wanted("sd" + std::to_string(k)) == down;
+    };
+    View v;
+    v.live = true;
+    v.gear_ok = true;
+    v.sgear = true;
+    // every gear the strip has, reverse (-1) and the gear above the strip (9)
+    for (int gear = -1; gear <= 9; ++gear) {
+        v.gear = gear;
+        for (int k = 0; k < kGearPlaces; ++k)
+            CHECK(sides(v, k, k > gear, k < gear));
+    }
+    // the current gear's own place never has a mark; exactly one side elsewhere
+    v.gear = 4;
+    CHECK(sides(v, 4, false, false) && sides(v, 5, true, false) && sides(v, 3, false, true) && sides(v, 0, false, true));
+    // the gate: the setting off, the gear not read, the car not read
+    for (int what = 0; what < 3; ++what) {
+        View w = v;
+        if (what == 0)
+            w.sgear = false;
+        else if (what == 1)
+            w.gear_ok = false;
+        else
+            w.live = false;
+        for (int k = 0; k < kGearPlaces; ++k)
+            CHECK(sides(w, k, false, false));
+    }
+    // the model: on by default with the gear read; off with the setting; off when the car is not read
+    {
+        gs::GameState s;
+        s.compatible = true;
+        s.session.active = true;
+        s.vehicle.ok = true;
+        s.vehicle.player = true;
+        s.vehicle.gear_ok = true;
+        s.vehicle.gear = 3;
+        HudModel m;
+        m.update(s, 1 / 60.0, HudConfig{});
+        CHECK(m.view().live && m.view().sgear && m.view().gear == 3);
+        HudConfig off;
+        off.suggested_gear = false;
+        m.update(s, 1 / 60.0, off);
+        CHECK(m.view().live && !m.view().sgear);
+        s.spectate.on = true; // a watched car: no mark
+        m.update(s, 1 / 60.0, HudConfig{});
+        CHECK(m.view().live && !m.view().sgear);
+        s.spectate.on = false;
+        s.vehicle.gear_ok = false;
+        m.update(s, 1 / 60.0, HudConfig{});
+        CHECK(!m.view().sgear);
+        m.update(gs::GameState{}, 1 / 60.0, HudConfig{});
+        CHECK(!m.view().live && !m.view().sgear);
+    }
+    // the older leaves keep their places: the 18 new ones come last
+    {
+        Leaves L;
+        publish(L, v, 0.0);
+        const std::vector<std::string> p = L.paths();
+        CHECK(p.size() >= 18 && p[p.size() - 18] == "view_model_data.hud_halo_su0" && p.back() == "view_model_data.hud_halo_sd8");
+    }
+}
+
+// The hold after a shift (0.2.3): a strip place the gear has just left, or passed in a shift of several gears, shows
+// no suggested-gear mark for kSgearHold seconds; every other place is untouched in every frame.
+static void test_sgear_hold()
+{
+    const double dt = 0.008; // 125 frames a second: the hold's end does not fall on a frame
+    const int hold = int(std::ceil(kSgearHold / dt)); // frames a place stays held, the shift's frame included
+    gs::GameState s;
+    s.compatible = true;
+    s.session.active = true;
+    s.vehicle.ok = true;
+    s.vehicle.player = true;
+    s.vehicle.gear_ok = true;
+    HudModel m;
+    Leaves L;
+    double t = 0;
+    // one frame at the given gear, then every place's leaves against the rule: `dark` = the places held (a bit
+    // mask); every other place by the side of the gear alone
+    auto frame = [&](int gear, unsigned dark, bool option = true) {
+        HudConfig cfg;
+        cfg.suggested_gear = option;
+        s.vehicle.gear = gear;
+        m.update(s, dt, cfg);
+        t += dt;
+        publish(L, m.view(), t);
+        bool ok = m.view().sgear_hold == dark;
+        for (int k = 0; k < kGearPlaces; ++k) {
+            const bool held = (dark >> k) & 1u;
+            ok = ok && L.wanted("su" + std::to_string(k)) == (option && !held && k > gear);
+            ok = ok && L.wanted("sd" + std::to_string(k)) == (option && !held && k < gear);
+        }
+        return ok;
+    };
+    auto run = [&](int gear, unsigned dark, int frames) {
+        bool ok = true;
+        for (int i = 0; i < frames; ++i)
+            ok = frame(gear, dark) && ok;
+        return ok;
+    };
+    // the first gear read holds nothing; a steady gear holds nothing
+    CHECK(run(3, 0, 60));
+    // an upshift: the gear left (3) is dark for the hold, then lights as the place below; the others never change
+    CHECK(run(4, 1u << 3, hold));
+    CHECK(frame(4, 0) && L.wanted("sd3"));
+    CHECK(run(4, 0, 60));
+    // a downshift: the gear left (4) is dark, then lights as the place above
+    CHECK(run(3, 1u << 4, hold));
+    CHECK(frame(3, 0) && L.wanted("su4"));
+    CHECK(run(3, 0, 60));
+    // a shift of several gears in one read (3 -> 7): the place left and the places passed are held
+    CHECK(run(7, 0x78u, hold));
+    CHECK(run(7, 0, 60));
+    // quick downshifts 7 -> 6 -> 5 -> 4 -> 3, one every 0.1 s, toward an amber mark on 2: each place left is held
+    // from its own shift; places N, 1 and 2 are amber and place 8 green in every frame
+    {
+        const int step = int(std::lround(0.1 / dt));
+        int left[kGearPlaces]; // frames since the gear left place k, -1 never
+        for (int &x : left)
+            x = -1;
+        bool amber = true, green8 = true, all = true;
+        int gear = 7;
+        for (int f = 0; f < 4 * step + hold + 10; ++f) {
+            for (int &x : left)
+                x += x >= 0;
+            if (f % step == 0 && f / step < 4)
+                left[gear--] = 0;
+            unsigned dark = 0;
+            for (int k = 0; k < kGearPlaces; ++k)
+                if (left[k] >= 0 && left[k] < hold)
+                    dark |= 1u << k;
+            all = frame(gear, dark) && all;
+            amber = amber && L.wanted("sd0") && L.wanted("sd1") && L.wanted("sd2") && !L.wanted("su2");
+            green8 = green8 && L.wanted("su8");
+        }
+        CHECK(all);
+        CHECK(amber && green8);
+        CHECK(gear == 3 && m.view().sgear_hold == 0 && L.wanted("su4") && L.wanted("su7"));
+    }
+    // back and forth inside the hold (3 -> 4 -> 3): each place is held from its own shift
+    CHECK(frame(4, 1u << 3));
+    CHECK(frame(3, (1u << 3) | (1u << 4)));
+    CHECK(run(3, (1u << 3) | (1u << 4), hold - 2));
+    CHECK(frame(3, 1u << 4)); // place 3's hold ran out one frame earlier (it is the current gear: unseen)
+    CHECK(frame(3, 0) && L.wanted("su4"));
+    // neutral, reverse and the gear above the strip: only strip places are held
+    CHECK(run(3, 0, 60));
+    CHECK(run(1, 0xCu, hold) && run(1, 0, 60));
+    CHECK(frame(0, 1u << 1));
+    CHECK(frame(-1, 0x3u));
+    CHECK(run(-1, 0x3u, hold - 2));
+    CHECK(run(-1, 0x1u, 1) && run(-1, 0, 60));
+    CHECK(frame(0, 0)); // from reverse into N: no strip place was left
+    CHECK(run(8, 0xFFu, hold) && run(8, 0, 60)); // N ... 7 passed
+    CHECK(run(9, 1u << 8, hold) && run(9, 0, 60));
+    CHECK(frame(8, 0)); // from above the strip onto 8: nothing left behind on the strip
+    // a frame without a gear keeps the last gear read: a shift across it still holds
+    s.vehicle.gear_ok = false;
+    m.update(s, dt, HudConfig{});
+    CHECK(!m.view().sgear && m.view().sgear_hold == 0);
+    s.vehicle.gear_ok = true;
+    CHECK(frame(7, 1u << 8));
+    // the option off: nothing lights, held or not; back on inside the hold: still held
+    CHECK(frame(6, 0x180u, false));
+    CHECK(frame(6, 0x180u));
+    // another car or a restart (a new subject): nothing carries over
+    s.session.subject += 1;
+    CHECK(frame(2, 0) && L.wanted("su3") && L.wanted("sd1"));
+    CHECK(frame(3, 1u << 2));
+    // the hold runs on the model's clock: one long frame ends it
+    s.vehicle.gear = 3;
+    m.update(s, 0.5, HudConfig{});
+    CHECK(m.view().sgear_hold == 0);
+    // every pair (the gear left, which the game's value may still name; the gear read): no leaf of the gear left
+    // is on at any frame of the hold, and both are on their sides again right after it
+    int pairs = 0;
+    for (int from = 0; from <= 8; ++from)
+        for (int to = 0; to <= 8; ++to) {
+            if (from == to)
+                continue;
+            HudModel m2;
+            Leaves L2;
+            s.vehicle.gear = from;
+            m2.update(s, dt, HudConfig{});
+            s.vehicle.gear = to;
+            bool dark = true;
+            for (int i = 0; i < hold; ++i) {
+                m2.update(s, dt, HudConfig{});
+                publish(L2, m2.view(), i * dt);
+                dark = dark && !L2.wanted("su" + std::to_string(from)) && !L2.wanted("sd" + std::to_string(from));
+            }
+            m2.update(s, dt, HudConfig{});
+            publish(L2, m2.view(), 1.0);
+            pairs += dark && L2.wanted("su" + std::to_string(from)) == (from > to) &&
+                     L2.wanted("sd" + std::to_string(from)) == (from < to);
+        }
+    CHECK(pairs == 72);
+}
+
 // The leaves publish() writes, for tools/native/check_leaves.py (template bindings must all be written).
 static void test_leaf_names(const char *out_path)
 {
@@ -1413,7 +1622,7 @@ static void test_leaf_names(const char *out_path)
     publish(L, v, 0.0);
     const std::vector<std::string> p = L.paths();
     CHECK(p.size() == size_t(4 + 9 + 2 * kStripes + 2 * kCapLevels + 3 + 4 + kRivalSlots + 3 + 20 + kGSegments + 2 * kGAxes +
-                             1 + 2 * kCapLevels));
+                             1 + 2 * kCapLevels + 2 * kGearPlaces));
     if (!out_path)
         return;
     FILE *f = std::fopen(out_path, "w");
@@ -1516,6 +1725,8 @@ int main(int argc, char **argv)
     test_spectate();
     test_levels();
     test_classes();
+    test_sgear();
+    test_sgear_hold();
     test_leaf_names(argc > 1 ? argv[1] : nullptr);
     bench_frame();
     bench_frame(true);

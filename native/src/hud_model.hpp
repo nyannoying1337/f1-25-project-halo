@@ -8,15 +8,20 @@
 #include "gmeter.hpp"
 #include "halo_track.hpp"
 
+#include <cstdint>
 #include <string>
 
 namespace halo {
+
+constexpr int kGearPlaces = 9;        // the gear strip's places: N, 1 ... 8
+constexpr double kSgearHold = 0.3;    // s a strip place stays without a suggested-gear mark after the gear left it
 
 struct HudConfig {
     bool show_names = true;
     bool show_turns = true;
     bool g_meter = false;       // the G-force meter in place of the speed centre (gmeter.hpp)
     bool all_cars = true;       // the halo in 2025 and F2 cars too (off: their stock dials); 2026 cars always
+    bool suggested_gear = true; // the game's gear suggestion marked on the gear strip (docs/suggested-gear.md)
 };
 
 struct View {
@@ -25,6 +30,13 @@ struct View {
     int kmh = 0, mph = 0;
     bool gear_ok = false;
     int gear = 0;               // -1 R, 0 N, 1..8 (9 shows nothing)
+    // the suggested-gear marks may show: the setting is on, the gear is read and the spectator HUD is not up (the
+    // game's suggestion is the local player's: there is none for a watched car)
+    bool sgear = false;
+    // bit k: strip place k was the current gear, or was passed by a shift, within the last kSgearHold seconds: its
+    // suggested-gear marks stay dark for that time, so a gear just left never flashes as a suggestion while the
+    // game's own value still names it
+    uint16_t sgear_hold = 0;
     bool pedals_ok = false;
     float throttle = 0, brake = 0;   // 0..1, eased
     bool energy_ok = false;
@@ -62,6 +74,10 @@ private:
     double e_time_[32]{};
     float e_val_[32]{};
     int e_n_ = 0;
+    // the suggested-gear marks' hold: the gear last read for this car, and until when (clock_) each place is held
+    bool sg_gear_known_ = false;
+    int sg_gear_ = 0;
+    double sg_hold_until_[kGearPlaces]{};
 };
 
 }

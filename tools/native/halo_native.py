@@ -108,6 +108,35 @@ GLOW_S, GLOW_LEN = 0.75, 55.0                 # the Overtake / Boost streak: sec
 GLOW_REPEAT = 1.0                             # s between two streaks while the mode stays on (halo_anim.hpp kAnimRepeat)
 ANIM_BOOLS = ('xan', 'xrl', 'xbo', 'xgr', 'xrv', 'xrr')   # + xg0..xg8, gv00..gv23 (native/src/halo_anim.hpp)
 
+# Suggested gear (0.2.3, docs/suggested-gear.md): the game's own gear suggestion on the strip. The dial's view model
+# writes the string leaf desired_gear_display on every update: the suggestion while the gear assist gives one, else
+# the current gear, from the game's table "R", "N", "1" ... "9" ("?" out of range). An MVCD on that leaf (as the DRS
+# pill's on drs_pit_state, a string leaf of the same view model) shows the mark of the suggested strip place; the
+# DLL's leaves su<k> / sd<k> light its green (place k above the current gear) or amber (below) sprite, and neither
+# when k is the current gear, the option is off or the car is not the player's own.
+SGEAR_DB = 'desired_gear_display'
+SGEAR_STRIP = 'N12345678'                     # the strip's nine places, as tools/halo.js draws them
+SGEAR_VALUES = ('R', 'N', '1', '2', '3', '4', '5', '6', '7', '8', '9', '?')   # every value the game writes
+# A place the decision node has just switched to shows its mark only after a short delay: the DLL's leaves follow the
+# game's value up to four flow ticks later (the sample one tick after the game's write, the queued write one tick
+# after the sample, one more when a frame's write budget is used up, one for the binding), which is 0.125 s at 32
+# frames a second; one key interval more is kept as margin. The delay is a clip, not a timer: the marks' anim null is folded (scale SGEAR_FOLD) from the play's
+# start through SGEAR_DELAY_KEYS key intervals and at full size one interval later, and it is at full size at the
+# play's end, at both ends of the clip and in the scene, so a null no signal reaches shows its marks as before.
+SGEAR_DELAY_KEYS = 9                          # of ANIM_KEYS over ANIM_PLAY: folded for 0.141 s, full size at 0.156 s
+SGEAR_FOLD = 0.001                            # the folded scale (the rival line's RIVAL_FOLD)
+SGEAR_ARM, SGEAR_END = ANIM_SEG               # a hidden place waits at the play's start; a play ends at its end
+SGEAR_BACKSTOP = 0.85                         # s after the last event (a play is over): the named place is put at the play's end
+SGEAR_TIMER, SGEAR_AGAIN = 'sg_t', 'sg_q'
+
+
+def sgear_track():
+    """The marks' scale keys on anim_times(): full size at rest, folded from the play's start through
+    SGEAR_DELAY_KEYS intervals, full size from the next key to the play's end."""
+    one, fold = (1.0, 1.0, 1.0), (SGEAR_FOLD, SGEAR_FOLD, 1.0)
+    assert 0 < SGEAR_DELAY_KEYS < ANIM_KEYS - 1
+    return [one] * 2 + [fold] + [fold if i <= SGEAR_DELAY_KEYS else one for i in range(ANIM_KEYS + 1)] + [one] * 2
+
 
 def ease3(p):
     p = min(max(p, 0.0), 1.0)
@@ -700,6 +729,55 @@ def _halo(B, geo, halo, pv=None, cls=None):
     if game:
         ani['decisions'].append(dict(type='MVCD', name='an_xgr', db=leaf('xgr'),
                                       events=[['1', [_go(f'x_gear{i}', 1.0) for i in range(9)]]]))
+        # 0.2.3, the suggested gear: per strip place a null (hidden in the scene; the MVCD sg_gear shows the one the
+        # game suggests) with the green and the amber mark, each shown by its DLL leaf. Above the digits and the RPM
+        # line's core (layer 25, the battery bolt's);
+        # outside the standard / G-meter groups, like the digits. The editor copy has none.
+        # The place's two marks hang on an anim null at the mark's centre (zh_sg<k>_anim, UIXA x_sg<k>): its clip
+        # keeps the marks folded for SGEAR_DELAY_KEYS key intervals of a play and at full size from then on. The game's value and the
+        # DLL's leaves do not turn in the same frame, so a place the game has only just named (after a shift: the new
+        # gear's own place) may meet leaves that still describe the gear before; the fold covers those frames.
+        # Every event of sg_gear puts each place it hides at the play's start (folded) and plays the place it shows
+        # from there, so a place is delayed exactly when it comes up and a place that stays up is never touched.
+        # Each player gets its signal while its place's group is shown (before the hide, after the show), so nothing
+        # rests on a player being driven under a hidden group; both signals of a pair run in one event.
+        sg_nodes, sg_plays = [], []
+        for i in range(9):
+            sg = B.null(f'{pfx}sg{i}', (0.0, 0.0, 0.0), hidden=True)
+            B.kids(halo, sg)
+            sg_nodes.append((f'v_sg{i}', f'{pfx}sg{i}'))
+            x0, y0, x1, y1 = geo.rect(f'sg_up_{i}')
+            c = at((x0 + x1) / 2, (y0 + y1) / 2)
+            null = f'zh_sg{i}_anim'
+            an = B.null(null, c, anim=True)
+            B.kids(sg, an)
+            for key, sprite, lf in ((f'sgu{i}', f'sg_up_{i}', f'su{i}'), (f'sgd{i}', f'sg_dn_{i}', f'sd{i}')):
+                B.kids(an, sprite_quad(pfx + key, sprite, 25, c))
+                vis.append(('v_' + key, pfx + key, leaf(lf), False, False))
+            ani['clips'][null] = dict(pos=None, rot=None, scale=sgear_track())
+            ani['uixa'].append((f'x_sg{i}', null))    # not in ani['rest']: the DLL's rest signals never reach it
+            sg_plays.append(f'x_sg{i}')
+
+        def sg_event(v):
+            sigs = []
+            for i in range(9):
+                if SGEAR_STRIP[i] != v:
+                    sigs += [_go(f'x_sg{i}', SGEAR_ARM), [f'v_sg{i}', 'hide', None]]
+            for i in range(9):
+                if SGEAR_STRIP[i] == v:
+                    sigs += [[f'v_sg{i}', 'show', None], _play(f'x_sg{i}', SGEAR_END)]
+            # the backstop's timer: runs while a place is up, stopped while none is
+            sigs.append([SGEAR_TIMER, 'reset', {'duration': float(SGEAR_BACKSTOP)}] if v in SGEAR_STRIP else
+                        [SGEAR_TIMER, 'stop', None])
+            return sigs
+        ani['sgear'] = dict(
+            nodes=sg_nodes, plays=sg_plays, name='sg_gear', db=SGEAR_DB,
+            events=[[v, sg_event(v)] for v in SGEAR_VALUES],
+            # the backstop: SGEAR_BACKSTOP after the last event the timer asks the value once more through a second,
+            # never registered MVCD, whose event puts the named place's null at the play's end (full size). It only
+            # matters if a play did not run after its null was put at the start; otherwise the null is there already.
+            timer=SGEAR_TIMER, again=SGEAR_AGAIN,
+            again_events=[[v, [_go(f'x_sg{i}', SGEAR_END)]] for i, v in enumerate(SGEAR_STRIP)])
 
     # 3. recharge / deploy capsules: one static window per fill level, one of them shown at a time. 2025 cars: the
     # DLL's 120 kW leaves rk / dk (docs/halo-car-classes.md 7), the same windows
@@ -1350,12 +1428,64 @@ def _anim_nodes(info, base, stock_root, parent):
             trig += [U.sig(path, 'register', 'trigger'), U.sig(path, 'query', 'trigger')]
             untrig.append(U.sig(path, 'unregister', 'untrigger'))
     trig += [U.sig(f'{base}.{nm}', 'goToFraction', 'trigger', {'value': 1.0}) for nm in a['rest']]
+    sg = a.get('sgear')
+    if sg:
+        # 0.2.3, the suggested gear: the nine marks' groups (static visible False until an event shows one) and the
+        # MVCD on the game's desired_gear_display. The value's type: the stock dial under this [F1HD] binds it as a
+        # string and as nothing else (its desired_gear_lower / _higher labels); the events: every value of the
+        # game's table, so each value sets all nine groups.
+        assert _tags(_node_at(stock_root, parent)).get(sg['db']) == {'stri'}, ('no stock stri binding of', sg['db'], parent)
+        assert [e for e, _ in sg['events']] == list(SGEAR_VALUES) and len(sg['nodes']) == len(SGEAR_STRIP)
+        marks = [nm for nm, _el in sg['nodes']]
+        plays, timer, again = sg['plays'], sg['timer'], sg['again']
+        assert not (set(marks) | {sg['name'], timer, again}) & names, 'suggested gear: a node name is taken'
+        assert len(plays) == len(marks) and set(plays) <= {nm for nm, _el in a['uixa']} and not set(plays) & set(a['rest'])
+        curve = U.djb2(ANIM_CURVE)
+        for ev, sigs in sg['events']:
+            # each value sets all nine places: the one it names is shown and played from the start it waits at, each
+            # other one is hidden and put back at that start; the timer runs while a place is up
+            k = SGEAR_STRIP.find(ev)
+            want = {(marks[i], 'show' if i == k else 'hide', None) for i in range(len(marks))}
+            want |= {(plays[i], 'playToFraction', (('curveName', curve), ('value', float(SGEAR_END)))) if i == k else
+                     (plays[i], 'goToFraction', (('value', float(SGEAR_ARM)),)) for i in range(len(plays))}
+            want.add((timer, 'reset', (('duration', float(SGEAR_BACKSTOP)),)) if k >= 0 else (timer, 'stop', None))
+            got = [(t, p, tuple(sorted(at.items())) if at else None) for t, p, at in sigs]
+            assert len(got) == len(want) == 19 and set(got) == want, ('suggested gear event', ev)
+            order = [t for t, _p, _a in sigs]
+            # a player is signalled while its place's group shows: after the show, before the hide
+            assert all((order.index(marks[i]) < order.index(plays[i])) == (i == k) for i in range(len(marks))), ev
+        assert [e for e, _ in sg['again_events']] == list(SGEAR_STRIP)
+        for i, (ev, sigs) in enumerate(sg['again_events']):
+            assert sigs == [[plays[i], 'goToFraction', {'value': float(SGEAR_END)}]], ev
+        nodes += [U.node(nm, 'UIGP', [('visible', U.prop('bool', False))], layout=[el], behav=U.GROUP_BEHAVIOURS)
+                  for nm, el in sg['nodes']]
+        nodes.append(U.node(sg['name'], 'MVCD', [('dbEntry', U.prop('stri', sg['db']))],
+                            events=[U.event(ev, [U.sig(f'{base}.{t}', pin, ev, at) for t, pin, at in sigs])
+                                    for ev, sigs in sg['events']]))
+        # the backstop: a timer as the stock HUD's and an_omt (enabled / visible False; reset with a duration, stop,
+        # time_out_expired) and a second MVCD on the same value that is only ever queried by it
+        nodes.append(U.node(timer, 'TIME', [('enabled', U.prop('bool', False)), ('visible', U.prop('bool', False))],
+                            events=[U.event('time_out_expired', [U.sig(f'{base}.{again}', 'query', 'time_out_expired', None)])]))
+        nodes.append(U.node(again, 'MVCD', [('dbEntry', U.prop('stri', sg['db']))],
+                            events=[U.event(ev, [U.sig(f'{base}.{t}', pin, ev, at) for t, pin, at in sigs])
+                                    for ev, sigs in sg['again_events']]))
+        path = f'{base}.{sg["name"]}'
+        # trigger: every place to the play's end (full size) first, then the node's register and query. The query's
+        # event then puts each place it hides at the start and plays the named one from the end it is at: a mark
+        # that is up when the dial is shown again stays up without a blink, whatever a player's first fraction is.
+        # A signal to the start only ever reaches a place at the moment an event hides it.
+        trig += [U.sig(f'{base}.{nm}', 'goToFraction', 'trigger', {'value': float(SGEAR_END)}) for nm in plays]
+        trig += [U.sig(path, 'register', 'trigger'), U.sig(path, 'query', 'trigger')]
+        untrig += [U.sig(path, 'unregister', 'untrigger'), U.sig(f'{base}.{timer}', 'stop', 'untrigger')]
+        a['sgear_counts'] = dict(signals=sum(len(s) for _e, s in sg['events']) + len(sg['again_events']) + 1,
+                                 trigger=len(plays) + 2, untrigger=2)
     if a.get('fit') and parent.startswith('hud_spectator_2.'):
         # layout 'cam': a spectator dial draws the halo at today's place and size (the race dials have no
         # such node: there the scene's own, fitted pose stands)
         nodes.append(U.node(a['fit'][0], 'UIXA', [], layout=[a['fit'][1]], behav=XA_BEHAV))
         trig.append(U.sig(f'{base}.{a["fit"][0]}', 'goToFraction', 'trigger', {'value': FIT_TV}))
-    a['counts'] = dict(uixa=len(a['uixa']), decisions=len(a['decisions']), signals=nsig, rest=len(a['rest']))
+    a['counts'] = dict(uixa=len(a['uixa']), decisions=len(a['decisions']), signals=nsig, rest=len(a['rest']),
+                       sgear=len(sg['nodes']) if sg else 0)
     return nodes, (trig, untrig)
 
 
