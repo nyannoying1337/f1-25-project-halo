@@ -1,4 +1,4 @@
-// In-process game-state provider for F1 25 (2026 Season Pack), build sha256 d873a1c8…
+// In-process game-state provider for F1 25 (2026 Season Pack), Steam build 26566308, sha256 46009bd3…
 //
 // Reads the game's own objects: the engine-wide vehicle table, each car's systems (engine, gearbox,
 // chassis, steering, energy recovery) and the vehicle-progress system. Every pointer is validated before
@@ -25,8 +25,8 @@ namespace {
 
 namespace mem = swofty::mem;
 
-constexpr uint32_t kBuildTimestamp = 1789118616; // F1_25.exe, Steam, sha256 d873a1c8d2044cef…
-constexpr uint32_t kBuildImageSize = 0x193e6000;
+constexpr uint32_t kBuildTimestamp = 1794312636; // F1_25.exe, Steam, sha256 46009bd31f49d93…
+constexpr uint32_t kBuildImageSize = 0x18434000;
 constexpr double kScanPeriod = 0.1; // s: every car in the table re-read and the running order rebuilt (10 Hz)
 constexpr double kNamePeriod = 1.0; // s: the track name re-read
 constexpr double kSearchPeriod = 1.0; // s: the component registry searched again for a missing results system
@@ -57,7 +57,7 @@ namespace car {
 constexpr uintptr_t lock = 0x98;            // ptr == car + lock_cs                                         static
 constexpr uintptr_t lock_cs = 0xa0;
 constexpr uintptr_t systems_vt = 0x380;     // vptr of the embedded container == vt_Car_SystemsContainer    static
-constexpr uintptr_t systems_vt_rva = 0x5c040c8;
+constexpr uintptr_t systems_vt_rva = 0x5c06308;
 constexpr uintptr_t vehicle_id = 0xe8;   // u8: index into the vehicle table                       KB L3
 constexpr uintptr_t is_ai = 0x124;       // u32: 1 while the AI drives the car (a state, not identity) KB L3
 constexpr uintptr_t throttle = 0x188;    // f32 0..1 applied throttle                               static
@@ -138,7 +138,7 @@ constexpr size_t max_slots = 4096;
 } // namespace registry
 
 namespace results {
-constexpr uintptr_t key_rva = 0x607f1a0;                // image-relative key (0x14607f1a0 - 0x140000000)
+constexpr uintptr_t key_rva = 0x60811a0;                // image-relative key for Steam build 26566308
 constexpr uintptr_t vec_begin = 0x148, vec_end = 0x150; // entry pointers, indexed by vehicle id
 constexpr uintptr_t vehicle = 0x0;                      // u8 vehicle id (Game_RaceHelper_GetVehicleByPosition)
 constexpr uintptr_t pos_a = 0x48, pos_b = 0x50;         // u32: position - 1 = a ^ b
@@ -150,9 +150,9 @@ constexpr uintptr_t hi = 0x58;                          // entry span read at on
 // controller set per vehicle; a HumanController at set+0x20 exists only for a car a human drives on this machine,
 // and an AI takeover switches the set's active-controller index without removing it.
 namespace controllers {
-constexpr uintptr_t cache_rva = 0x6096578;     // qword global: the ControllerSystem
-constexpr uintptr_t vt_system_rva = 0x58824a0; // vt_Sess_ControllerSystem
-constexpr uintptr_t vt_human_rva = 0x5882170;  // vt_Sess_HumanController
+constexpr uintptr_t cache_rva = 0x6098578;     // qword global: the ControllerSystem
+constexpr uintptr_t vt_system_rva = 0x5884600; // vt_Sess_ControllerSystem
+constexpr uintptr_t vt_human_rva = 0x58842d0;  // vt_Sess_HumanController
 constexpr uintptr_t sets = 0x30;               // ptr: ControllerSet *[]
 constexpr uintptr_t count_vec = 0x90;          // ptr: set count = byte((u32 [+0x30] - u32 [+0x28]) >> 3)
 constexpr uintptr_t count_lo = 0x28, count_hi = 0x30;
@@ -167,7 +167,7 @@ constexpr uintptr_t set_vehicle = 0x34;        // u8: the set's vehicle index
 // flag the spectator HUD shows on (session.spectator_mode.active); the safety-car cinematic and the winner sequence
 // also call SetActive, so the halo follows the director only while +0xd0 is set too (docs/spectator-ui.md §2).
 namespace spectate {
-constexpr uintptr_t key_rva = 0x6080ca8; // registry key (address of a static)
+constexpr uintptr_t key_rva = 0x6082ca8; // registry key (address of a static)
 constexpr uintptr_t lo = 0xd0, hi = 0xec; // the span copied at once, once per scan
 constexpr uintptr_t ui = 0xd0;          // u8 != 0 while the spectator HUD is up                         KB L1
 constexpr uintptr_t active = 0xd1;      // u8 != 0 while spectating                                      in game
@@ -991,7 +991,7 @@ F1_25Provider::~F1_25Provider() = default;
 
 const char *F1_25Provider::describe() const
 {
-    return impl_->ok ? "F1 25 d873a1c8 (in-process memory)" : "F1 25 (unsupported build: in-process reads disabled)";
+    return impl_->ok ? "F1 25 Steam 26566308 (in-process memory)" : "F1 25 (unsupported build: in-process reads disabled)";
 }
 
 bool F1_25Provider::compatible() const { return impl_->ok; }
@@ -1046,7 +1046,7 @@ bool f1_25_resolve(F1_25Symbols &out, const char **missing)
     uintptr_t at = 0;
     int32_t disp = 0;
     if (swofty::api && swofty::api->scan &&
-        swofty::api->scan(".xtls", "48 8B 05 ?? ?? ?? ?? 48 8B 80 D0 00 00 00 48 8B 80 E8 00 00 00", &at) == 1 && at &&
+        swofty::api->scan(".tls$", "48 8B 05 ?? ?? ?? ?? 48 8B 80 D0 00 00 00 48 8B 80 E8 00 00 00", &at) == 1 && at &&
         rd(at + 3, disp))
         out.track_world = at + 7 + intptr_t(disp);
     return true;

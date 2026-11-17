@@ -86,7 +86,7 @@ Keys keys_from_image(uintptr_t b, uintptr_t gm)
     k.team_tables = b + keys::team_tables;
     k.lap_times = b + keys::lap_times;
     k.badge_names = b + render_badge::names;
-    k.badge_none = b + render_badge::none_word;
+    // The encoded default badge word has no verified address on this build.
     k.customisation = b + render_badge::customisation;
     return k;
 }
@@ -478,9 +478,9 @@ void Reader::read_badges(double now, const Frame &f)
                 uint32_t nw = 0;
                 uintptr_t np = 0;
                 char key[kBadgeKeyMax] = {};
-                if (src <= render_badge::max_source && k_.badge_none && get(k_.badge_none, nw)) {
+                if (src <= render_badge::max_source) {
                     char name[24];
-                    if (uint32_t(nw + render_badge::none_add) == id)
+                    if (k_.badge_none && get(k_.badge_none, nw) && uint32_t(nw + render_badge::none_add) == id)
                         std::snprintf(key, sizeof key, "%s", kRenderBadgeDefault);
                     else if (k_.badge_names && get(k_.badge_names + src * 8, np) && np &&
                              read_cstr(np, name, sizeof name) && name[0])

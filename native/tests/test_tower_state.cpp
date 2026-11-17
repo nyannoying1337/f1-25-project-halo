@@ -325,7 +325,7 @@ static void test_flags()
     const Mem m = im.mem();
     // image globals at a fake image base: sector ends 1500 / 3200 / 6000 m, track 6000 m, 3 sectors
     const uintptr_t base = 0x140000000;
-    im.regions[base + 0x6ce6600] = std::vector<uint8_t>(0x100, 0);
+    im.regions[base + track_globals::sector_end] = std::vector<uint8_t>(0x100, 0);
     im.put<float>(base + track_globals::sector_end + 0, 1500.f);
     im.put<float>(base + track_globals::sector_end + 4, 3200.f);
     im.put<float>(base + track_globals::sector_end + 8, 6000.f);

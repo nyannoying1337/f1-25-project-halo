@@ -27,7 +27,7 @@ struct Keys {
     uintptr_t game_manager = 0;      // address of g_Game_Manager (a pointer variable)
     uintptr_t results = 0;           // R    image + 0x607f1a0
     uintptr_t timing = 0;            // T    image + 0x604ea90
-    uintptr_t pit = 0;               // pit-state system, image + 0x60fb708
+    uintptr_t pit = 0;               // pit-state system, image + 0x60fd708
     uintptr_t safety_car = 0;        // SafetyCarLogicSystem, image + 0x6100bd8
     uintptr_t penalty_log = 0;       // image + 0x60fdfe0
     uintptr_t session_component = 0; // S1 (MisconductManager inside), image + 0x6096ac8
@@ -39,10 +39,10 @@ struct Keys {
     uintptr_t team_tables = 0;       // team badges: the team records per kind, image + 0x606ecd8
     uintptr_t lap_times = 0;         // VehicleLapTimes, image + 0x6096ae8 (the race's fastest lap)
     uintptr_t badge_names = 0;       // render badge source names, image + 0x5612e60 (char *[3])
-    uintptr_t badge_none = 0;        // the render badge none value's word, image + 0xbd53ed8
+    uintptr_t badge_none = 0;        // optional encoded default render-badge ID
     uintptr_t customisation = 0;     // the player customisation system's pointer, image + 0x6064cb8 (log)
 };
-constexpr uintptr_t kRvaPit = 0x60fb708;
+constexpr uintptr_t kRvaPit = 0x60fd708;
 Keys keys_from_image(uintptr_t image_base, uintptr_t game_manager);
 
 // What the reader needs from the halo's provider each frame.

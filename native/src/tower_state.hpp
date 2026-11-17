@@ -33,21 +33,21 @@ struct Mem {
 // Image-relative registry keys (add the image base). A key is the address of a type descriptor; AddSystem
 // 0x144500dc0 files a system under the address its vtable slot 0 returns (`lea rax,[KEY]; ret`).
 namespace keys {
-constexpr uintptr_t results = 0x607f1a0;            // R (the provider already reads it)
-constexpr uintptr_t timing = 0x604ea90;             // T: plain getter 0x142882980
-constexpr uintptr_t penalty_log = 0x60fdfe0;        // slot0 0x1435cb830, vtable 0x145848e80, built in 0x1407e5420
-constexpr uintptr_t session_component = 0x6096ac8;  // slot0 0x142fe6060, vtable 0x1457f6250, ctor 0x142f24900
-constexpr uintptr_t tyre_system = 0x6080d28;        // slot0 0x142ed1b10, vtable 0x1457ef110
-constexpr uintptr_t safety_car_logic = 0x6100bd8;   // slot0 0x143671550, vtable 0x145850710
-constexpr uintptr_t marshal_zones = 0x60fdde0;      // "MarshalZoneMonitor": slot0 0x1435cc0d0, vtable 0x14584aa90
-constexpr uintptr_t red_flag = 0x60fde00;           // "RedFlagSystem": slot0 0x1435cc3d0, vtable 0x14584b0d0
+constexpr uintptr_t results = 0x60811a0;            // R (the provider already reads it)
+constexpr uintptr_t timing = 0x6050a90;             // T: plain getter 0x142882980
+constexpr uintptr_t penalty_log = 0x60fffe0;        // slot0 0x1435cb830, vtable 0x145848e80, built in 0x1407e5420
+constexpr uintptr_t session_component = 0x6098ac8;  // slot0 0x142fe6060, vtable 0x1457f6250, ctor 0x142f24900
+constexpr uintptr_t tyre_system = 0x6082d28;        // slot0 0x142ed1b10, vtable 0x1457ef110
+constexpr uintptr_t safety_car_logic = 0x6102bd8;   // slot0 0x143671550, vtable 0x145850710
+constexpr uintptr_t marshal_zones = 0x60ffde0;      // "MarshalZoneMonitor": slot0 0x1435cc0d0, vtable 0x14584aa90
+constexpr uintptr_t red_flag = 0x60ffe00;           // "RedFlagSystem": slot0 0x1435cc3d0, vtable 0x14584b0d0
 // team badges (field-traces.md §10): the two systems the standings pill's view model takes from the registry in
 // its constructor 0x141759a40 (stores 0x141759ab1 / 0x141759ae4) and its badge setter 0x141760020 reads
-constexpr uintptr_t game_mode_context = 0x604ed28;  // pill [vm+0x20]; also [g_Game_Manager]+0xc0 (0x1407eb3da)
-constexpr uintptr_t team_tables = 0x606ecd8;        // pill [vm+0x28]: the team tables per kind at +0x2c8
+constexpr uintptr_t game_mode_context = 0x6050d28;  // pill [vm+0x20]; also [g_Game_Manager]+0xc0 (0x1407eb3da)
+constexpr uintptr_t team_tables = 0x6070cd8;        // pill [vm+0x28]: the team tables per kind at +0x2c8
 // the race's fastest lap (field-traces.md §11): VehicleLapTimes, the system Sess_LapTimes_GetCarData
 // 0x142f0c7f0 takes (the pill VM keeps it at +0x1f40, data-and-ui.md "Systems the VM holds")
-constexpr uintptr_t lap_times = 0x6096ae8;
+constexpr uintptr_t lap_times = 0x6098ae8;
 } // namespace keys
 
 // The game's lap times (field-traces.md §11). LT = registry(lap_times). Per vehicle id a record pointer in the
@@ -166,9 +166,9 @@ constexpr size_t kMaxMarshalZones = 64; // sanity bound, not a game value (the U
 // Image-relative globals (add the image base). The game's per-sector mapping and its lap-data builder both read
 // them: sector i ends at sector_end[i] metres (the first i with sector_end[i] >= distance is the sector).
 namespace track_globals {
-constexpr uintptr_t sector_end = 0x6ce6660;   // f32[sector_count]
-constexpr uintptr_t track_length = 0x6ce66b8; // f32 metres, g_Game_TrackLength
-constexpr uintptr_t sector_count = 0x6ce66bc; // u32
+constexpr uintptr_t sector_end = 0x6ce8660;   // f32[sector_count]
+constexpr uintptr_t track_length = 0x6ce86b8; // f32 metres, g_Game_TrackLength
+constexpr uintptr_t sector_count = 0x6ce86bc; // u32
 } // namespace track_globals
 constexpr int kMaxSectors = 8; // sanity bound for the bit mask; the game's own array holds 3
 
@@ -280,11 +280,10 @@ constexpr unsigned my_team_kind = 1;
 // part after the prefix as the car's key (render = true).
 namespace render_badge {
 constexpr uintptr_t entrant_badge = 0x68;     // u32 in the entrant record
-constexpr uintptr_t names = 0x5612e60;        // image rva: char *[max_source + 1]
+constexpr uintptr_t names = 0x5614e60;        // image rva: char *[max_source + 1]
 constexpr unsigned max_source = 2;
-constexpr uintptr_t none_word = 0xbd53ed8;    // image rva: u32; + none_add = the id drawn as the default
 constexpr uint32_t none_add = 0x5874f662;
-constexpr uintptr_t customisation = 0x6064cb8; // image rva: the player customisation system's singleton pointer
+constexpr uintptr_t customisation = 0x6066cb8; // image rva: the player customisation system's singleton pointer
 constexpr uintptr_t standard_badge = 0x1b8;    // u32 in it (Game_PlayerCustomisationInfoSystem_WriteSaveData)
 } // namespace render_badge
 constexpr const char kRenderBadgePrefix[] = "eaid://ui_package/art/textures/render_badge_";

@@ -1,4 +1,4 @@
-// F1 25 (Steam build sha256 d873a1c8…, PE timestamp 1789118616) in-process game-state provider.
+// F1 25 (Steam build 26566308) in-process game-state provider.
 #pragma once
 #include "game_state.hpp"
 
@@ -23,7 +23,7 @@ struct F1_25Symbols {
     uintptr_t controllers = 0;    // qword global holding the ControllerSystem (0x146096578)
     uintptr_t vt_controllers = 0; // vt_Sess_ControllerSystem (0x1458824a0)
     uintptr_t vt_human = 0;       // vt_Sess_HumanController (0x145882170)
-    uintptr_t spectate_key = 0;   // the spectator director's registry key (0x146080ca8): while the spectator HUD is
+    uintptr_t spectate_key = 0;   // the spectator director's registry key: while the spectator HUD is
                                   // up the halo follows the watched car (docs/spectator-ui.md §2); optional
     // vt_Car_SystemsContainer (0x145c040c8): the vptr of the component container embedded at CarLive+0x380, the
     // car's type identity (CarLive itself has no vtable). Required.

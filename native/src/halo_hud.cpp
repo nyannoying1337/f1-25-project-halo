@@ -185,14 +185,14 @@ void init(App &A)
                 A.elements.pit_card ? "on" : "off", A.elements.lap_card ? "on" : "off",
                 A.elements.pit_banner ? "on" : "off");
     swofty::log("[halo-re] game state: %s (build %s, bindings %s%s%s, track name %s)", A.provider->describe(),
-                build ? "d873a1c8 matches" : "differs", resolved ? "resolved" : "missing ", resolved ? "" : missing,
+                build ? "Steam 26566308 matches" : "differs", resolved ? "resolved" : "missing ", resolved ? "" : missing,
                 "", sym.track_world ? "found" : "not found");
     if (!A.provider->compatible())
         swofty::log("[halo-re] in-process reads are off: the halo keeps the game's own speed, revs and battery and "
                     "shows nothing it cannot read");
     if (validation_log) {
         if (diag::start())
-            swofty::log("[halo-re] validation log: swofty/addons/nick.f1-2026-halo/%s", diag::path_utf8());
+            swofty::log("[halo-re] validation log in add-on storage: %s", diag::path_utf8());
         else
             swofty::log("[halo-re] validation log: the launcher's storage is not available, nothing is recorded");
     }
