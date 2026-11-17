@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.4 beta
+
+Quick fix for the F1 25 update 1.0.145 (Steam). On that version the halo and the timing tower showed no data, because the game's memory layout moved.
+
+### Fixed
+
+- The halo and the timing tower read the game again on F1 25 1.0.145 (Steam). Thanks to faustp6-alt for the fix.
+
+### Known issues
+
+- Not yet tested in game on 1.0.145. If a value looks wrong, switch the part off in the settings and report it.
+- This version works only on F1 25 1.0.145 (Steam). On the older game version the halo shows no data.
+- Custom team badges: the game's default badge is not recognised on this version.
+
 ## 0.2.3 beta
 
 The halo now shows the game's suggested gear. Players who drive with the gear suggestion assist no longer lose the hint when the halo replaces the game's dial.
